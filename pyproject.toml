@@ -4,12 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nmtc-mapper"
-version = "0.1.0"
+version = "0.1.1"
 description = "Automated NMTC eligibility checker — geocode addresses and check Low-Income Community status using CDFI Fund and Census data"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
 dependencies = [
+    "aiohttp>=3.8.0",
+    "tqdm>=4.64.0",
     "pandas>=1.4.0",
     "numpy>=1.21.0",
     "requests>=2.27.0",

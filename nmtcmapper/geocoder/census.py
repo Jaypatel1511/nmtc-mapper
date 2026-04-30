@@ -1,46 +1,152 @@
 """
-Census Geocoding API wrapper.
-Converts addresses to census tract GEOIDs using the free Census Bureau API.
+Census Geocoding API wrapper with async batch processing.
+Converts addresses to 11-digit census tract FIPS codes.
+Uses asyncio + aiohttp for high-throughput batch geocoding.
 """
+import asyncio
+import aiohttp
 import requests
 import pandas as pd
 import io
 import time
 from typing import Optional
+from tqdm import tqdm
 
 from nmtcmapper.data.schema import (
-    CENSUS_GEOCODER_URL, CENSUS_GEOCODER_BATCH_URL
+    CENSUS_GEOCODER_URL,
+    CENSUS_GEOCODER_BATCH_URL,
 )
 
+# Rate limiting
+MAX_CONCURRENT_REQUESTS = 10
+REQUEST_TIMEOUT         = 15
+MAX_RETRIES             = 3
+RETRY_BACKOFF           = 2.0   # seconds
 
-def geocode_address(address: str, retry: int = 2) -> Optional[str]:
+
+async def _geocode_single_async(
+    session: aiohttp.ClientSession,
+    address: str,
+    semaphore: asyncio.Semaphore,
+    retries: int = MAX_RETRIES,
+) -> Optional[str]:
     """
-    Geocode a single address to an 11-digit census tract GEOID.
-
-    Uses the free Census Bureau Geocoding API — no API key required.
+    Async geocode a single address to an 11-digit census tract FIPS code.
 
     Args:
-        address: Full address string e.g. "1234 S Michigan Ave, Chicago, IL 60605"
-        retry:   Number of retries on failure
+        session:   aiohttp ClientSession
+        address:   Full address string
+        semaphore: Semaphore to limit concurrent requests
+        retries:   Number of retries on failure
 
     Returns:
-        11-digit census tract GEOID (state+county+tract) or None if not found
+        11-digit FIPS code or None
     """
     params = {
-        "street":       _parse_street(address),
-        "city":         _parse_city(address),
-        "state":        _parse_state(address),
-        "zip":          _parse_zip(address),
-        "benchmark":    "Public_AR_Current",
-        "vintage":      "Current_Current",
-        "layers":       "Census Tracts",
-        "format":       "json",
+        "street":    _parse_street(address),
+        "city":      _parse_city(address),
+        "state":     _parse_state(address),
+        "zip":       _parse_zip(address),
+        "benchmark": "Public_AR_Current",
+        "vintage":   "Current_Current",
+        "layers":    "Census Tracts",
+        "format":    "json",
     }
 
-    for attempt in range(retry + 1):
+    async with semaphore:
+        for attempt in range(retries + 1):
+            try:
+                async with session.get(
+                    CENSUS_GEOCODER_URL,
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
+                ) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+
+                    matches = data.get("result", {}).get("addressMatches", [])
+                    if not matches:
+                        return None
+
+                    geo    = matches[0].get("geographies", {})
+                    tracts = geo.get("Census Tracts", [])
+                    if not tracts:
+                        return None
+
+                    state  = tracts[0].get("STATE", "")
+                    county = tracts[0].get("COUNTY", "")
+                    tract  = tracts[0].get("TRACT", "")
+
+                    if state and county and tract:
+                        return f"{state}{county}{tract}"
+                    return None
+
+            except Exception:
+                if attempt < retries:
+                    await asyncio.sleep(RETRY_BACKOFF * (attempt + 1))
+                else:
+                    return None
+
+
+async def _batch_geocode_async(addresses: list) -> list:
+    """
+    Async batch geocode a list of addresses.
+
+    Args:
+        addresses: List of address strings
+
+    Returns:
+        List of FIPS codes (None for failed lookups) in same order
+    """
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+    results   = [None] * len(addresses)
+
+    connector = aiohttp.TCPConnector(limit=MAX_CONCURRENT_REQUESTS)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        tasks = [
+            _geocode_single_async(session, addr, semaphore)
+            for addr in addresses
+        ]
+
+        with tqdm(total=len(tasks), desc="Geocoding", unit="addr") as pbar:
+            for i, coro in enumerate(asyncio.as_completed(
+                {asyncio.create_task(t): i for i, t in enumerate(tasks)}
+            )):
+                pass
+
+        # Run all tasks and preserve order
+        results = await asyncio.gather(*tasks)
+
+    return list(results)
+
+
+def geocode_address(address: str) -> Optional[str]:
+    """
+    Geocode a single address synchronously.
+    Uses the Census Bureau Geocoding API — no API key required.
+
+    Args:
+        address: Full address e.g. "1234 S Michigan Ave, Chicago, IL 60605"
+
+    Returns:
+        11-digit census tract FIPS code or None
+    """
+    params = {
+        "street":    _parse_street(address),
+        "city":      _parse_city(address),
+        "state":     _parse_state(address),
+        "zip":       _parse_zip(address),
+        "benchmark": "Public_AR_Current",
+        "vintage":   "Current_Current",
+        "layers":    "Census Tracts",
+        "format":    "json",
+    }
+
+    for attempt in range(MAX_RETRIES + 1):
         try:
             response = requests.get(
-                CENSUS_GEOCODER_URL, params=params, timeout=15
+                CENSUS_GEOCODER_URL, params=params,
+                timeout=REQUEST_TIMEOUT
             )
             response.raise_for_status()
             data = response.json()
@@ -49,7 +155,7 @@ def geocode_address(address: str, retry: int = 2) -> Optional[str]:
             if not matches:
                 return None
 
-            geo = matches[0].get("geographies", {})
+            geo    = matches[0].get("geographies", {})
             tracts = geo.get("Census Tracts", [])
             if not tracts:
                 return None
@@ -62,9 +168,9 @@ def geocode_address(address: str, retry: int = 2) -> Optional[str]:
                 return f"{state}{county}{tract}"
             return None
 
-        except Exception as e:
-            if attempt < retry:
-                time.sleep(1)
+        except Exception:
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_BACKOFF * (attempt + 1))
             else:
                 return None
 
@@ -72,102 +178,54 @@ def geocode_address(address: str, retry: int = 2) -> Optional[str]:
 def geocode_batch(
     df: pd.DataFrame,
     address_col: str = "address",
-    batch_size: int = 100,
-    sleep_between: float = 1.0,
+    batch_size: int = 500,
+    use_async: bool = True,
 ) -> pd.DataFrame:
     """
-    Geocode a batch of addresses using the Census batch geocoder.
+    Geocode a batch of addresses using async processing.
 
     Args:
-        df:             DataFrame with address column
-        address_col:    Name of the address column
-        batch_size:     Addresses per batch (max 10,000 per Census API)
-        sleep_between:  Seconds to sleep between batches
+        df:          DataFrame with address column
+        address_col: Name of the address column
+        batch_size:  Addresses per chunk
+        use_async:   Use async geocoding (recommended for >100 addresses)
 
     Returns:
         DataFrame with added 'tract_id' column
     """
     df = df.copy()
-    df["tract_id"] = None
+    addresses = df[address_col].tolist()
+    total = len(addresses)
 
-    total = len(df)
-    print(f"Geocoding {total:,} addresses in batches of {batch_size}...")
+    print(f"Geocoding {total:,} addresses "
+          f"({'async' if use_async else 'sync'})...")
 
-    for start in range(0, total, batch_size):
-        end = min(start + batch_size, total)
-        batch = df.iloc[start:end]
-
-        print(f"  Batch {start//batch_size + 1}: rows {start}–{end}")
-
-        try:
-            tract_ids = _batch_geocode_census(batch, address_col)
-            df.loc[batch.index, "tract_id"] = tract_ids
-        except Exception as e:
-            print(f"  Batch failed: {e} — falling back to single geocoding")
-            for idx, row in batch.iterrows():
-                df.at[idx, "tract_id"] = geocode_address(row[address_col])
-
-        if end < total:
-            time.sleep(sleep_between)
+    if use_async and total > 1:
+        # Process in chunks to avoid memory issues
+        all_results = []
+        for start in range(0, total, batch_size):
+            chunk = addresses[start:start + batch_size]
+            print(f"  Chunk {start//batch_size + 1}: "
+                  f"rows {start}–{min(start+batch_size, total)}")
+            try:
+                results = asyncio.run(_batch_geocode_async(chunk))
+            except RuntimeError:
+                # Already in event loop (e.g. Jupyter)
+                import nest_asyncio
+                nest_asyncio.apply()
+                results = asyncio.run(_batch_geocode_async(chunk))
+            all_results.extend(results)
+        df["tract_id"] = all_results
+    else:
+        tract_ids = []
+        for addr in tqdm(addresses, desc="Geocoding", unit="addr"):
+            tract_ids.append(geocode_address(addr))
+        df["tract_id"] = tract_ids
 
     matched = df["tract_id"].notna().sum()
-    print(f"Geocoded {matched:,}/{total:,} addresses successfully")
+    print(f"Geocoded {matched:,}/{total:,} addresses "
+          f"({matched/total*100:.1f}% match rate)")
     return df
-
-
-def _batch_geocode_census(
-    df: pd.DataFrame, address_col: str
-) -> list:
-    """
-    Use Census batch geocoding API for a chunk of addresses.
-    Returns list of tract IDs in same order as input.
-    """
-    # Build CSV for batch API
-    rows = []
-    for i, (idx, row) in enumerate(df.iterrows()):
-        addr = str(row[address_col])
-        street = _parse_street(addr)
-        city   = _parse_city(addr)
-        state  = _parse_state(addr)
-        zip_   = _parse_zip(addr)
-        rows.append(f'{i},"{street}","{city}","{state}","{zip_}"')
-
-    csv_content = "\n".join(rows)
-
-    response = requests.post(
-        CENSUS_GEOCODER_BATCH_URL,
-        files={"addressFile": ("addresses.csv", csv_content, "text/csv")},
-        data={
-            "benchmark": "Public_AR_Current",
-            "vintage": "Current_Current",
-            "layers": "Census Tracts",
-        },
-        timeout=60,
-    )
-    response.raise_for_status()
-
-    result_df = pd.read_csv(
-        io.StringIO(response.text),
-        header=None,
-        names=["id", "input_address", "match", "match_type",
-               "matched_address", "coords", "tiger_line_id",
-               "side", "state", "county", "tract", "block"],
-        dtype=str,
-    )
-
-    tract_ids = []
-    for _, row in result_df.iterrows():
-        if (row.get("match") == "Match" and
-                pd.notna(row.get("state")) and
-                pd.notna(row.get("county")) and
-                pd.notna(row.get("tract"))):
-            tract_ids.append(
-                f"{row['state']}{row['county']}{row['tract']}"
-            )
-        else:
-            tract_ids.append(None)
-
-    return tract_ids
 
 
 def _parse_street(address: str) -> str:
