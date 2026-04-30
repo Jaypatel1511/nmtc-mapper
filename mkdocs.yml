@@ -1,0 +1,26 @@
+site_name: nmtc-mapper
+site_description: Automated NMTC eligibility checker for addresses and census tracts
+site_url: https://jaypatel1511.github.io/nmtc-mapper
+repo_url: https://github.com/Jaypatel1511/nmtc-mapper
+repo_name: Jaypatel1511/nmtc-mapper
+
+theme:
+  name: material
+  palette:
+    primary: indigo
+    accent: blue
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Quickstart: quickstart.md
+  - API Reference: api.md
+  - Eligibility Rules: eligibility.md
+
+markdown_extensions:
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - admonition
