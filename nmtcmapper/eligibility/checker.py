@@ -20,6 +20,7 @@ class EligibilityResult:
     unemployment_rate: Optional[float]
     is_non_metro: bool
     is_high_migration_rural: bool
+    is_nmtc_native_area: bool
     severe_distress: bool
     deep_distress: bool
     geocode_success: bool
@@ -70,6 +71,7 @@ def check_tract(
             "unemployment_rate": None,
             "is_non_metro": False,
             "is_high_migration_rural": False,
+            "is_nmtc_native_area": False,
             "severe_distress": False,
             "deep_distress": False,
         }
@@ -83,6 +85,7 @@ def check_tract(
         "unemployment_rate":     row.get("unemployment_rate"),
         "is_non_metro":          bool(row.get("is_non_metro", False)),
         "is_high_migration_rural": bool(row.get("is_high_migration_rural", False)),
+        "is_nmtc_native_area":   bool(row.get("is_nmtc_native_area", False)),
         "severe_distress":       bool(row.get("severe_distress", False)),
         "deep_distress":         bool(row.get("deep_distress", False)),
     }
@@ -109,7 +112,7 @@ def enrich_dataframe(
     eligibility_cols = [
         "nmtc_eligible", "distress_level", "poverty_rate",
         "ami_ratio", "unemployment_rate", "is_non_metro",
-        "is_high_migration_rural", "severe_distress", "deep_distress",
+        "is_high_migration_rural", "is_nmtc_native_area", "severe_distress", "deep_distress",
     ]
 
     for col in eligibility_cols:

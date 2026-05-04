@@ -93,6 +93,8 @@ def _compute_eligibility(df: pd.DataFrame) -> pd.DataFrame:
     ami = df.get("ami_ratio", pd.Series(dtype=float))
     unemp = df.get("unemployment_rate", pd.Series(dtype=float))
     non_metro = df.get("is_non_metro", pd.Series(False, index=df.index))
+    if "is_nmtc_native_area" not in df.columns:
+        df["is_nmtc_native_area"] = False
 
     poverty_lic = pr >= LIC_POVERTY_RATE_THRESHOLD
     ami_lic = (
@@ -126,21 +128,21 @@ def _compute_eligibility(df: pd.DataFrame) -> pd.DataFrame:
 
 def _build_sample_table() -> pd.DataFrame:
     sample_tracts = [
-        ("17031840100", 0.38, 0.55, 0.12, False, False),
-        ("17031839100", 0.42, 0.48, 0.15, False, False),
-        ("17031010100", 0.18, 0.92, 0.04, False, False),
-        ("36061015900", 0.35, 0.60, 0.11, False, False),
-        ("36061019100", 0.28, 0.72, 0.09, False, False),
-        ("36047052200", 0.14, 0.88, 0.05, False, False),
-        ("26163518300", 0.45, 0.45, 0.18, False, False),
-        ("26163520100", 0.32, 0.62, 0.13, False, False),
-        ("13121010400", 0.29, 0.68, 0.10, False, False),
-        ("48113010900", 0.22, 0.78, 0.07, False, False),
-        ("17019000100", 0.15, 0.95, 0.03, True,  True),
-        ("26001010100", 0.18, 0.88, 0.06, True,  False),
+        ("17031840100", 0.38, 0.55, 0.12, False, False, False),
+        ("17031839100", 0.42, 0.48, 0.15, False, False, False),
+        ("17031010100", 0.18, 0.92, 0.04, False, False, False),
+        ("36061015900", 0.35, 0.60, 0.11, False, False, False),
+        ("36061019100", 0.28, 0.72, 0.09, False, False, False),
+        ("36047052200", 0.14, 0.88, 0.05, False, False, False),
+        ("26163518300", 0.45, 0.45, 0.18, False, False, False),
+        ("26163520100", 0.32, 0.62, 0.13, False, False, False),
+        ("13121010400", 0.29, 0.68, 0.10, False, False, False),
+        ("48113010900", 0.22, 0.78, 0.07, False, False, False),
+        ("17019000100", 0.15, 0.95, 0.03, True,  True,  False),
+        ("26001010100", 0.18, 0.88, 0.06, True,  False, False),
     ]
     rows = []
-    for tid, pr, ami, unemp, non_metro, high_migration in sample_tracts:
+    for tid, pr, ami, unemp, non_metro, high_migration, native_area in sample_tracts:
         rows.append({
             "tract_id": tid,
             "state": tid[:2],
@@ -149,6 +151,7 @@ def _build_sample_table() -> pd.DataFrame:
             "unemployment_rate": unemp,
             "is_non_metro": non_metro,
             "is_high_migration_rural": high_migration,
+            "is_nmtc_native_area": native_area,
         })
     df = pd.DataFrame(rows)
     df = _compute_eligibility(df)

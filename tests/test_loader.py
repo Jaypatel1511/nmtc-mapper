@@ -71,6 +71,12 @@ def test_affluent_tract_not_eligible():
     assert result["nmtc_eligible"].iloc[0] == False
 
 
+def test_sample_table_has_native_area_field():
+    df = _build_sample_table()
+    assert "is_nmtc_native_area" in df.columns
+    assert df["is_nmtc_native_area"].isin([True, False]).all()
+
+
 def test_deep_distress_classified():
     df = pd.DataFrame([{
         "tract_id": "TEST004",

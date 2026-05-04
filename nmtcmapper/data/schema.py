@@ -39,6 +39,7 @@ ELIGIBILITY_FILE_COLUMNS = {
     "HIGH_MIGRATION_RURAL":     "is_high_migration_rural",
     "LIC_ELIGIBLE":             "lic_eligible_raw",
     "SEVERE_DISTRESS":          "severe_distress_raw",
+    "NATIVE_AREA":              "is_nmtc_native_area",
 }
 
 # ── Download URLs ─────────────────────────────────────────────────────────────

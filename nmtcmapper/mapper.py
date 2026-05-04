@@ -69,6 +69,7 @@ class NMTCMapper:
                 "unemployment_rate": None,
                 "is_non_metro": False,
                 "is_high_migration_rural": False,
+                "is_nmtc_native_area": False,
                 "severe_distress": False,
                 "deep_distress": False,
             }
