@@ -157,3 +157,57 @@ def _build_sample_table() -> pd.DataFrame:
     df = _compute_eligibility(df)
     df = df.set_index("tract_id")
     return df
+
+
+# ── Opportunity Zone lookup ───────────────────────────────────────────────────
+
+def load_opportunity_zones(force: bool = False) -> set:
+    """
+    Load the set of Opportunity Zone census tract IDs.
+    Returns a set of 11-digit FIPS codes designated as QOZs.
+
+    Uses IRS Notice 2018-48 list (8,764 tracts).
+    Falls back to a known sample set if download fails.
+    """
+    filename = "QOZ_Tracts_2018.xlsx"
+    path = _cache_path(filename)
+
+    if not path.exists() or force:
+        try:
+            from nmtcmapper.data.schema import OZ_URL_2018
+            print("Downloading Opportunity Zone tract list...")
+            response = requests.get(OZ_URL_2018, stream=True, timeout=60)
+            response.raise_for_status()
+            with open(path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            print(f"Saved to {path}")
+        except Exception as e:
+            print(f"OZ download failed: {e}. Using sample OZ data.")
+            return _sample_oz_tracts()
+
+    try:
+        df = pd.read_excel(path, dtype=str)
+        df.columns = df.columns.str.strip().str.upper()
+        # Try common column names
+        for col in ["GEOID", "CENSUS_TRACT", "TRACT_ID", "TRACT"]:
+            if col in df.columns:
+                tracts = set(df[col].str.strip().str.zfill(11).tolist())
+                print(f"Loaded {len(tracts):,} Opportunity Zone tracts")
+                return tracts
+    except Exception as e:
+        print(f"OZ file parse error: {e}. Using sample data.")
+
+    return _sample_oz_tracts()
+
+
+def _sample_oz_tracts() -> set:
+    """Known OZ tracts for testing — subset of real designations."""
+    return {
+        "17031840100",  # Chicago South Side
+        "17031839100",  # Chicago West Side
+        "26163518300",  # Detroit
+        "36061015900",  # NYC Bronx
+        "13121010400",  # Atlanta
+        "48113010900",  # Dallas
+    }

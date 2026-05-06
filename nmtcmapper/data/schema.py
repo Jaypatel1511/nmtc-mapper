@@ -42,6 +42,15 @@ ELIGIBILITY_FILE_COLUMNS = {
     "NATIVE_AREA":              "is_nmtc_native_area",
 }
 
+# ── Opportunity Zone Data ────────────────────────────────────────────────────
+# Source: IRS Notice 2018-48 — 8,764 designated QOZ census tracts
+# Made permanent by One Big Beautiful Bill Act (2025), new OZ 2.0 designations
+# expected in 2026-2027
+OZ_URL_2018 = (
+    "https://www.cdfifund.gov/sites/cdfi/files/2018-06/"
+    "QOZ_Tracts_List_Formatted_July2018.xlsx"
+)
+
 # ── Download URLs ─────────────────────────────────────────────────────────────
 CDFI_FUND_LIC_URL_2020 = (
     "https://www.cdfifund.gov/sites/cdfi/files/2024-08/"

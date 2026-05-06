@@ -24,6 +24,7 @@ class EligibilityResult:
     severe_distress: bool
     deep_distress: bool
     geocode_success: bool
+    is_opportunity_zone: bool = False
 
     @property
     def distress_description(self) -> str:
@@ -44,6 +45,7 @@ class EligibilityResult:
         if self.unemployment_rate is not None:
             print(f"  Unemployment:     {self.unemployment_rate*100:.1f}%")
         print(f"  Non-Metro:        {'Yes' if self.is_non_metro else 'No'}")
+        print(f"  Opportunity Zone: {'Yes' if self.is_opportunity_zone else 'No'}")
         print(f"  High Migration:   {'Yes' if self.is_high_migration_rural else 'No'}")
         print()
 

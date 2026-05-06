@@ -4,7 +4,7 @@ NMTCMapper — main public API for NMTC eligibility checking.
 import pandas as pd
 from typing import Optional
 
-from nmtcmapper.data.loader import load_eligibility_table
+from nmtcmapper.data.loader import load_eligibility_table, load_opportunity_zones
 from nmtcmapper.geocoder.census import geocode_address, geocode_batch
 from nmtcmapper.eligibility.checker import (
     check_tract, enrich_dataframe, EligibilityResult
@@ -40,6 +40,8 @@ class NMTCMapper:
         print("Loading NMTC eligibility table...")
         self._table = load_eligibility_table(force=force_reload)
         print(f"Ready. {len(self._table):,} census tracts loaded.")
+        self._oz_tracts = load_opportunity_zones()
+        print(f"Opportunity Zones loaded: {len(self._oz_tracts):,} tracts")
 
     def check_address(self, address: str) -> EligibilityResult:
         """
@@ -74,6 +76,10 @@ class NMTCMapper:
                 "deep_distress": False,
             }
 
+        if tract_id:
+            data["is_opportunity_zone"] = tract_id in self._oz_tracts
+        else:
+            data["is_opportunity_zone"] = False
         return EligibilityResult(
             address=address,
             tract_id=tract_id,
@@ -92,6 +98,7 @@ class NMTCMapper:
             EligibilityResult with eligibility flags
         """
         data = check_tract(tract_id, self._table)
+        data["is_opportunity_zone"] = tract_id in self._oz_tracts
         return EligibilityResult(
             address=f"Census Tract {tract_id}",
             tract_id=tract_id,
@@ -177,6 +184,10 @@ class NMTCMapper:
     @property
     def tract_count(self) -> int:
         return len(self._table)
+
+    @property
+    def oz_tract_count(self) -> int:
+        return len(self._oz_tracts)
 
     @property
     def eligible_tract_count(self) -> int:

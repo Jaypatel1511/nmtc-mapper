@@ -52,3 +52,13 @@ def test_result_summary_runs(mapper):
 def test_eligible_count_raises_without_enrich(mapper, sample_df):
     with pytest.raises(ValueError, match="Run .enrich()"):
         mapper.eligible_count(sample_df)
+
+
+def test_oz_tract_count_positive(mapper):
+    assert mapper.oz_tract_count > 0
+
+
+def test_check_tract_has_oz_flag(mapper):
+    result = mapper.check_tract("17031840100")
+    assert hasattr(result, "is_opportunity_zone")
+    assert isinstance(result.is_opportunity_zone, bool)
