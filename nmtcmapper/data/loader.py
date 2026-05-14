@@ -31,7 +31,7 @@ def _cache_path(filename: str) -> Path:
 
 
 def download_eligibility_file(force: bool = False) -> Path:
-    filename = "NMTC_LIC_Eligibility_2016_2020.xlsx"
+    filename = "NMTC_LIC_Eligibility_2016_2020.xlsb"
     path = _cache_path(filename)
     if path.exists() and not force:
         print(f"Using cached eligibility file: {path}")
@@ -57,11 +57,78 @@ def load_eligibility_table(force: bool = False) -> pd.DataFrame:
         return _build_sample_table()
     print(f"Loading eligibility table from {path}...")
     try:
+        if path.suffix == ".xlsb":
+            return _load_xlsb_table(path)
         df = pd.read_excel(path, dtype=str)
         return _process_eligibility_table(df)
     except Exception as e:
         print(f"Error loading file: {e}. Using sample data.")
         return _build_sample_table()
+
+
+def _load_xlsb_table(path: Path) -> pd.DataFrame:
+    """Parse the Aug 2025 CDFI Fund .xlsb file.
+
+    Column layout (0-indexed) confirmed from the Aug-2025b release:
+      0  GEOID, 1 Metro/Non-metro, 2 LIC eligible (YES/NO),
+      3  Poverty rate %, 5 MFI ratio (decimal), 7 Unemployment rate %,
+     13  High migration (YES/NO), 14 Severe distress (YES/NO),
+     15  Deep distress (YES/NO)
+    """
+    try:
+        import pyxlsb
+    except ImportError:
+        raise ImportError(
+            "pyxlsb is required to read the CDFI Fund .xlsb file. "
+            "Install it with: pip install pyxlsb"
+        )
+
+    records = []
+    with pyxlsb.open_workbook(str(path)) as wb:
+        with wb.get_sheet("2016-2020") as sheet:
+            for i, row in enumerate(sheet.rows()):
+                if i == 0:
+                    continue
+                vals = [c.v for c in row]
+                if not vals[0]:
+                    continue
+
+                geoid        = str(vals[0]).strip().zfill(11)
+                non_metro    = str(vals[1]).strip().upper() != "METRO"
+                lic_elig     = str(vals[2]).strip().upper() == "YES"
+                poverty_rate = (vals[3] / 100) if isinstance(vals[3], (int, float)) else None
+                ami_ratio    = vals[5]          if isinstance(vals[5], (int, float)) else None
+                unemp_rate   = (vals[7] / 100) if isinstance(vals[7], (int, float)) else None
+                high_migr    = str(vals[13]).strip().upper() == "YES"
+                severe       = str(vals[14]).strip().upper() == "YES"
+                deep         = str(vals[15]).strip().upper() == "YES"
+
+                if deep:
+                    dlevel = "deep"
+                elif severe:
+                    dlevel = "severe"
+                elif lic_elig:
+                    dlevel = "lic"
+                else:
+                    dlevel = "ineligible"
+
+                records.append({
+                    "tract_id":              geoid,
+                    "nmtc_eligible":         lic_elig,
+                    "distress_level":        dlevel,
+                    "poverty_rate":          poverty_rate,
+                    "ami_ratio":             ami_ratio,
+                    "unemployment_rate":     unemp_rate,
+                    "is_non_metro":          non_metro,
+                    "is_high_migration_rural": high_migr,
+                    "is_nmtc_native_area":   False,
+                    "severe_distress":       severe,
+                    "deep_distress":         deep,
+                })
+
+    df = pd.DataFrame(records).set_index("tract_id")
+    print(f"Eligibility table loaded: {len(df):,} census tracts")
+    return df
 
 
 def _process_eligibility_table(df: pd.DataFrame) -> pd.DataFrame:

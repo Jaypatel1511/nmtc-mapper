@@ -52,9 +52,11 @@ OZ_URL_2018 = (
 )
 
 # ── Download URLs ─────────────────────────────────────────────────────────────
+# Aug 2025 update: CDFI Fund replaced the xlsx with an xlsb at a new path.
+# The file now includes pre-computed severe/deep distress flags.
 CDFI_FUND_LIC_URL_2020 = (
-    "https://www.cdfifund.gov/sites/cdfi/files/2024-08/"
-    "NMTC_LIC_Eligibility_2016_2020_ACS.xlsx"
+    "https://www.cdfifund.gov/system/files"
+    "?file=2025-08/NMTC_2016-2020_Severe_Deep_Distress_August-2025b.xlsb"
 )
 
 # ── Cache ─────────────────────────────────────────────────────────────────────
