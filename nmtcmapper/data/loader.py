@@ -233,10 +233,12 @@ def load_opportunity_zones(force: bool = False) -> set:
     Load the set of Opportunity Zone census tract IDs.
     Returns a set of 11-digit FIPS codes designated as QOZs.
 
-    Uses IRS Notice 2018-48 list (8,764 tracts).
+    Source: CDFI Fund designated-qozs.12.14.18.xlsx (8,764 tracts).
+    Sheet "QOZs 14Jun", header on row 5 (index 4),
+    tract FIPS in column "Census Tract Number".
     Falls back to a known sample set if download fails.
     """
-    filename = "QOZ_Tracts_2018.xlsx"
+    filename = "QOZ_Designated_2018.xlsx"
     path = _cache_path(filename)
 
     if not path.exists() or force:
@@ -254,14 +256,20 @@ def load_opportunity_zones(force: bool = False) -> set:
             return _sample_oz_tracts()
 
     try:
-        df = pd.read_excel(path, dtype=str)
-        df.columns = df.columns.str.strip().str.upper()
-        # Try common column names
-        for col in ["GEOID", "CENSUS_TRACT", "TRACT_ID", "TRACT"]:
+        df = pd.read_excel(
+            path,
+            sheet_name="QOZs 14Jun",
+            header=4,       # row 5 is the column header row
+            dtype=str,
+        )
+        # Normalize column names: collapse whitespace/newlines, uppercase
+        df.columns = df.columns.str.replace(r"\s+", " ", regex=True).str.strip().str.upper()
+        for col in ["CENSUS TRACT NUMBER", "GEOID", "CENSUS_TRACT", "TRACT_ID", "TRACT"]:
             if col in df.columns:
-                tracts = set(df[col].str.strip().str.zfill(11).tolist())
+                tracts = set(df[col].dropna().str.strip().str.zfill(11).tolist())
                 print(f"Loaded {len(tracts):,} Opportunity Zone tracts")
                 return tracts
+        print("OZ file parse error: tract column not found. Using sample data.")
     except Exception as e:
         print(f"OZ file parse error: {e}. Using sample data.")
 

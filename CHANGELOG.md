@@ -2,6 +2,23 @@
 
 All notable changes to nmtc-mapper are documented here.
 
+## [0.3.2] — 2026-05-14
+
+### Fixed
+- **OZ download URL** — The original URL (`cdfifund.gov/sites/cdfi/files/2018-06/
+  QOZ_Tracts_List_Formatted_July2018.xlsx`) returned HTTP 404, causing every
+  cold install to fall back to a 6-tract sample and flag no real project as an
+  Opportunity Zone.  Updated to the canonical CDFI Fund file at
+  `cdfifund.gov/system/files/documents/designated-qozs.12.14.18.xlsx`.
+- **OZ xlsx parse logic** — The new file uses sheet name `"QOZs 14Jun"`, has a
+  preamble so the actual column header is on row 5 (index 4), and names the
+  tract column `"Census Tract Number"` rather than `"GEOID"` / `"TRACT"`.
+  Updated `load_opportunity_zones()` to pass `sheet_name` and `header=4`, and
+  added `"CENSUS TRACT NUMBER"` as the first candidate in the column search.
+- **openpyxl floor raised to `>=3.1.0`** — current pandas requires this minimum
+  to read the OZ xlsx; the previous floor of `>=3.0.0` allowed installs that
+  silently failed to parse the file.
+
 ## [0.3.1] — 2026-05-14
 
 ### Fixed

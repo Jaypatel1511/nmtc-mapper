@@ -43,12 +43,14 @@ ELIGIBILITY_FILE_COLUMNS = {
 }
 
 # ── Opportunity Zone Data ────────────────────────────────────────────────────
-# Source: IRS Notice 2018-48 — 8,764 designated QOZ census tracts
-# Made permanent by One Big Beautiful Bill Act (2025), new OZ 2.0 designations
-# expected in 2026-2027
+# Source: CDFI Fund "List of designated Qualified Opportunity Zones"
+# Updated Dec 14 2018 to add final Puerto Rico tracts (8,764 total).
+# Made permanent by One Big Beautiful Bill Act (2025); OZ 2.0 designations
+# expected 2027.
+# Sheet: "QOZs 14Jun", header row index 4, tract column "Census Tract Number"
 OZ_URL_2018 = (
-    "https://www.cdfifund.gov/sites/cdfi/files/2018-06/"
-    "QOZ_Tracts_List_Formatted_July2018.xlsx"
+    "https://www.cdfifund.gov/system/files/documents/"
+    "designated-qozs.12.14.18.xlsx"
 )
 
 # ── Download URLs ─────────────────────────────────────────────────────────────

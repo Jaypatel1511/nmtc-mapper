@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nmtc-mapper"
-version = "0.3.1"
+version = "0.3.2"
 description = "Automated NMTC eligibility checker — geocode addresses and check Low-Income Community status using CDFI Fund and Census data"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -15,7 +15,7 @@ dependencies = [
     "pandas>=1.4.0",
     "numpy>=1.21.0",
     "requests>=2.27.0",
-    "openpyxl>=3.0.0",
+    "openpyxl>=3.1.0",
     "pyxlsb>=1.0.0",
 ]
 
