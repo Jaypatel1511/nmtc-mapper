@@ -2,6 +2,26 @@
 
 All notable changes to nmtc-mapper are documented here.
 
+## [0.3.3] — 2026-06-23
+
+### Changed
+- **`__version__` is now derived from installed package metadata** via
+  `importlib.metadata.version("nmtc-mapper")` instead of a hardcoded string.
+  This fixes a drift where the shipped wheel reported `__version__ == "0.1.0"`
+  while the distribution had been bumped to `0.3.2` — `pyproject.toml` is now
+  the single authoritative source of the version.
+- **`setup.py` reduced to a build shim** — the stale `version="0.3.0"` pin and
+  the duplicate dependency list were removed; all metadata now lives in
+  `pyproject.toml`.
+
+### Added
+- **CI / release infrastructure** — `ci.yml` (test matrix on Python 3.9–3.12,
+  all actions SHA-pinned) and a tag-triggered `release.yml` that verifies the
+  tag matches `pyproject.toml`, builds the wheel, tests the installed wheel in a
+  fresh venv, and publishes to PyPI via an OIDC Trusted Publisher (no API token).
+
+No behavioral or API change — this is a hygiene-only release.
+
 ## [0.3.2] — 2026-05-14
 
 ### Fixed

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nmtc-mapper"
-version = "0.3.2"
+version = "0.3.3"
 description = "Automated NMTC eligibility checker — geocode addresses and check Low-Income Community status using CDFI Fund and Census data"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -19,5 +19,15 @@ dependencies = [
     "pyxlsb>=1.0.0",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
 [project.urls]
 Homepage = "https://github.com/Jaypatel1511/nmtc-mapper"
+
+# Explicit discovery: the repo root also contains a generated `site/` (mkdocs
+# output) and `docs/`, `examples/` dirs. With the setup.py pin removed, build-time
+# auto-discovery would error on multiple top-level candidates — pin it to the
+# real package. (find_packages() in the old setup.py did this implicitly.)
+[tool.setuptools.packages.find]
+include = ["nmtcmapper*"]
