@@ -41,15 +41,21 @@ def download_eligibility_file(force: bool = False) -> Path:
         print(f"Using cached eligibility file: {path}")
         return path
     print("Downloading NMTC eligibility file from CDFI Fund...")
+    # Stream to a .part temp and atomically rename on success, so a mid-stream
+    # failure can never leave a truncated file at the final cache path (which
+    # would make every later run parse-fail on poisoned cache).
+    tmp = path.with_suffix(path.suffix + ".part")
     try:
         response = requests.get(CDFI_FUND_LIC_URL_2020, stream=True, timeout=120)
         response.raise_for_status()
-        with open(path, "wb") as f:
+        with open(tmp, "wb") as f:
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
+        tmp.replace(path)
         print(f"Saved to {path}")
         return path
     except requests.exceptions.HTTPError as e:
+        tmp.unlink(missing_ok=True)
         status = getattr(e.response, "status_code", None)
         if status == 404:
             reason = "not found (404) — the CDFI Fund file path may have moved"
@@ -62,6 +68,7 @@ def download_eligibility_file(force: bool = False) -> Path:
             f"{CDFI_FUND_LIC_URL_2020}: {reason}"
         ) from e
     except requests.exceptions.RequestException as e:
+        tmp.unlink(missing_ok=True)
         raise EligibilityDownloadError(
             f"Failed to download NMTC eligibility file from "
             f"{CDFI_FUND_LIC_URL_2020}: connection/DNS/timeout error "
@@ -282,7 +289,7 @@ def load_opportunity_zones(force: bool = False) -> set:
     Source: CDFI Fund designated-qozs.12.14.18.xlsx (8,764 tracts).
     Sheet "QOZs 14Jun", header on row 5 (index 4),
     tract FIPS in column "Census Tract Number".
-    Falls back to a known sample set if download fails.
+    Raises OZDownloadError / OZParseError on any failure — never falls back.
     """
     from nmtcmapper.data.schema import OZ_URL_2018
 
@@ -290,15 +297,20 @@ def load_opportunity_zones(force: bool = False) -> set:
     path = _cache_path(filename)
 
     if not path.exists() or force:
+        # Same atomic .part-then-rename pattern as download_eligibility_file —
+        # a mid-stream failure must never poison the final cache path.
+        tmp = path.with_suffix(path.suffix + ".part")
         try:
             print("Downloading Opportunity Zone tract list...")
             response = requests.get(OZ_URL_2018, stream=True, timeout=60)
             response.raise_for_status()
-            with open(path, "wb") as f:
+            with open(tmp, "wb") as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
+            tmp.replace(path)
             print(f"Saved to {path}")
         except requests.exceptions.HTTPError as e:
+            tmp.unlink(missing_ok=True)
             status = getattr(e.response, "status_code", None)
             if status == 404:
                 reason = "not found (404) — the OZ file path may have moved"
@@ -310,6 +322,7 @@ def load_opportunity_zones(force: bool = False) -> set:
                 f"Failed to download Opportunity Zone file from {OZ_URL_2018}: {reason}"
             ) from e
         except requests.exceptions.RequestException as e:
+            tmp.unlink(missing_ok=True)
             raise OZDownloadError(
                 f"Failed to download Opportunity Zone file from {OZ_URL_2018}: "
                 f"connection/DNS/timeout error ({type(e).__name__}: {e})"

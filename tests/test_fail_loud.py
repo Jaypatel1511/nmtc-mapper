@@ -90,6 +90,89 @@ def test_oz_parse_failure_raises(isolated_cache):
         load_opportunity_zones(force=False)
 
 
+class _DroppingResponse:
+    """Mocks a download whose connection drops mid-stream after one chunk."""
+    def raise_for_status(self):
+        pass
+
+    def iter_content(self, chunk_size=8192):
+        yield b"PARTIAL_CONTENT_" * 512
+        raise requests.exceptions.ChunkedEncodingError("connection dropped mid-stream")
+
+
+def test_partial_download_cleanup_and_retry(isolated_cache, monkeypatch):
+    """H2: a mid-stream download failure must raise the typed download error AND
+    leave nothing at the final cache path (no poisoned partial file, no .part
+    temp) so the next attempt re-downloads instead of parse-failing forever."""
+    monkeypatch.setattr(loader.requests, "get", lambda *a, **k: _DroppingResponse())
+    with pytest.raises(EligibilityDownloadError):
+        load_eligibility_table(force=True)
+    assert not (isolated_cache / ELIG_FILENAME).exists(), \
+        "partial download left a poisoned file at the final cache path"
+    assert list(isolated_cache.glob("*.part")) == [], ".part temp file left behind"
+
+    # Second attempt: the mock now succeeds. force=False proves no poisoned
+    # cache short-circuits the retry — the loader must actually re-download.
+    payload = b"FULL_CONTENT" * 100
+    calls = []
+
+    class _GoodResponse:
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, chunk_size=8192):
+            yield payload
+
+    def _good_get(*a, **k):
+        calls.append(1)
+        return _GoodResponse()
+
+    monkeypatch.setattr(loader.requests, "get", _good_get)
+    path = loader.download_eligibility_file(force=False)
+    assert calls, "retry never re-downloaded (a leftover file short-circuited it)"
+    assert path == isolated_cache / ELIG_FILENAME
+    assert path.read_bytes() == payload
+    assert list(isolated_cache.glob("*.part")) == []
+
+
+def test_oz_partial_download_cleanup_and_retry(isolated_cache, monkeypatch):
+    """H2, OZ twin — mid-stream drop raises OZDownloadError with a clean cache,
+    then a successful retry re-downloads and the full load works end-to-end."""
+    import io
+    import openpyxl
+
+    monkeypatch.setattr(loader.requests, "get", lambda *a, **k: _DroppingResponse())
+    with pytest.raises(OZDownloadError):
+        load_opportunity_zones(force=True)
+    assert not (isolated_cache / OZ_FILENAME).exists(), \
+        "partial OZ download left a poisoned file at the final cache path"
+    assert list(isolated_cache.glob("*.part")) == [], ".part temp file left behind"
+
+    # Retry serves a valid OZ workbook -> construction works end-to-end.
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "QOZs 14Jun"
+    for _ in range(4):            # junk rows 1-4; header on row 5 (index 4)
+        ws.append([""])
+    ws.append(["Census Tract Number"])
+    ws.append(["17031840100"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    data = buf.getvalue()
+
+    class _GoodResponse:
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, chunk_size=8192):
+            yield data
+
+    monkeypatch.setattr(loader.requests, "get", lambda *a, **k: _GoodResponse())
+    oz = load_opportunity_zones(force=False)
+    assert oz == {"17031840100"}
+    assert list(isolated_cache.glob("*.part")) == []
+
+
 def test_oz_missing_tract_column_raises(isolated_cache):
     """A structurally-valid xlsx whose tract column is absent must raise, not
     degrade to the 6-tract sample (0.3.3 loader.py:272)."""

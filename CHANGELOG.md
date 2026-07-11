@@ -52,12 +52,17 @@ All notable changes to nmtc-mapper are documented here.
   geocode-failure fabricated-positive). No change is made to that repo here.
 - **Out of scope, deferred to 0.3.5:** the geocoder failure-swallow in
   `geocoder/census.py`, and schema/column-shift validation of the CDFI Fund file.
+  A geocode failure or an unknown/malformed tract ID still returns a normal result with
+  `nmtc_eligible=False` / `distress_level="ineligible"` rather than raising — only
+  `geocode_success=False` distinguishes it, and `enrich()` output carries no such flag.
+  Treat "ineligible" as unverified unless `geocode_success` is True and the tract was found.
+  Fix deferred to 0.3.5 alongside the census.py work.
 
 ## [0.3.3] — 2026-06-23
-<!-- [correction 2026-07: the "publishes to PyPI via an OIDC Trusted Publisher"
-     line below describes the *intended* pipeline, but 0.3.3 itself was published
-     manually with no attestations. The OIDC Trusted-Publisher pipeline first
-     runs for 0.3.4. History is annotated, not rewritten.] -->
+
+> **Correction (2026-07):** the "publishes to PyPI via an OIDC Trusted Publisher" line in the
+> 0.3.3 entry below described the *intended* pipeline; 0.3.3 was actually published manually
+> with twine, no attestations. The OIDC pipeline first runs for 0.3.4.
 
 ### Changed
 - **`__version__` is now derived from installed package metadata** via
