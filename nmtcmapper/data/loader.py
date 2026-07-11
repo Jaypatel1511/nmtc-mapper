@@ -7,6 +7,10 @@ import requests
 import pandas as pd
 from pathlib import Path
 
+from nmtcmapper.exceptions import (
+    EligibilityDataError, EligibilityDownloadError, EligibilityParseError,
+    OZDataError, OZDownloadError, OZParseError,
+)
 from nmtcmapper.data.schema import (
     CACHE_DIR, CDFI_FUND_LIC_URL_2020,
     ELIGIBILITY_FILE_COLUMNS,
@@ -45,25 +49,53 @@ def download_eligibility_file(force: bool = False) -> Path:
                 f.write(chunk)
         print(f"Saved to {path}")
         return path
-    except Exception as e:
-        print(f"Download failed: {e}")
-        return None
+    except requests.exceptions.HTTPError as e:
+        status = getattr(e.response, "status_code", None)
+        if status == 404:
+            reason = "not found (404) — the CDFI Fund file path may have moved"
+        elif status == 403:
+            reason = "access blocked (403 Forbidden)"
+        else:
+            reason = f"HTTP {status}"
+        raise EligibilityDownloadError(
+            f"Failed to download NMTC eligibility file from "
+            f"{CDFI_FUND_LIC_URL_2020}: {reason}"
+        ) from e
+    except requests.exceptions.RequestException as e:
+        raise EligibilityDownloadError(
+            f"Failed to download NMTC eligibility file from "
+            f"{CDFI_FUND_LIC_URL_2020}: connection/DNS/timeout error "
+            f"({type(e).__name__}: {e})"
+        ) from e
 
 
 def load_eligibility_table(force: bool = False) -> pd.DataFrame:
     path = download_eligibility_file(force=force)
     if path is None or not path.exists():
-        print("Using built-in sample eligibility data.")
-        return _build_sample_table()
+        # download_eligibility_file now raises on any download failure, so a
+        # missing file here means the download step was skipped and no local
+        # copy exists. Fail loud — never substitute demo data (F2).
+        raise EligibilityDownloadError(
+            f"No eligibility file available at "
+            f"{_cache_path('NMTC_LIC_Eligibility_2016_2020.xlsb')} and no download "
+            f"was performed."
+        )
     print(f"Loading eligibility table from {path}...")
     try:
         if path.suffix == ".xlsb":
             return _load_xlsb_table(path)
         df = pd.read_excel(path, dtype=str)
         return _process_eligibility_table(df)
+    except EligibilityDataError:
+        raise
+    except ImportError:
+        # Missing optional engine (e.g. pyxlsb) — its own message is actionable
+        # and is a dependency problem, not a corrupt-file problem. Don't mask it.
+        raise
     except Exception as e:
-        print(f"Error loading file: {e}. Using sample data.")
-        return _build_sample_table()
+        raise EligibilityParseError(
+            f"Failed to parse eligibility file {path}: {type(e).__name__}: {e}"
+        ) from e
 
 
 def _load_xlsb_table(path: Path) -> pd.DataFrame:
@@ -193,7 +225,16 @@ def _compute_eligibility(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _build_sample_table() -> pd.DataFrame:
+def load_sample_table() -> pd.DataFrame:
+    """Build the 12-tract synthetic demo table — an EXPLICIT opt-in only.
+
+    WARNING: this is 12 synthetic-vintage tracts for demos, examples, and tests.
+    It is NEVER valid for a real NMTC eligibility answer. Before 0.3.4 this table
+    was substituted silently whenever a download or parse failed, fabricating
+    'ineligible' results for real tracts; that path is gone. Use it only through
+    ``load_sample_table()`` or ``NMTCMapper.from_sample()`` when you knowingly
+    want demo data with ``data_source == "sample"``.
+    """
     sample_tracts = [
         ("17031840100", 0.38, 0.55, 0.12, False, False, False),
         ("17031839100", 0.42, 0.48, 0.15, False, False, False),
@@ -226,6 +267,11 @@ def _build_sample_table() -> pd.DataFrame:
     return df
 
 
+# Backwards-compatible alias: the examples/ notebook imports the private name.
+# Kept intentionally so that existing imports keep working after the F4 rename.
+_build_sample_table = load_sample_table
+
+
 # ── Opportunity Zone lookup ───────────────────────────────────────────────────
 
 def load_opportunity_zones(force: bool = False) -> set:
@@ -238,12 +284,13 @@ def load_opportunity_zones(force: bool = False) -> set:
     tract FIPS in column "Census Tract Number".
     Falls back to a known sample set if download fails.
     """
+    from nmtcmapper.data.schema import OZ_URL_2018
+
     filename = "QOZ_Designated_2018.xlsx"
     path = _cache_path(filename)
 
     if not path.exists() or force:
         try:
-            from nmtcmapper.data.schema import OZ_URL_2018
             print("Downloading Opportunity Zone tract list...")
             response = requests.get(OZ_URL_2018, stream=True, timeout=60)
             response.raise_for_status()
@@ -251,9 +298,22 @@ def load_opportunity_zones(force: bool = False) -> set:
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
             print(f"Saved to {path}")
-        except Exception as e:
-            print(f"OZ download failed: {e}. Using sample OZ data.")
-            return _sample_oz_tracts()
+        except requests.exceptions.HTTPError as e:
+            status = getattr(e.response, "status_code", None)
+            if status == 404:
+                reason = "not found (404) — the OZ file path may have moved"
+            elif status == 403:
+                reason = "access blocked (403 Forbidden)"
+            else:
+                reason = f"HTTP {status}"
+            raise OZDownloadError(
+                f"Failed to download Opportunity Zone file from {OZ_URL_2018}: {reason}"
+            ) from e
+        except requests.exceptions.RequestException as e:
+            raise OZDownloadError(
+                f"Failed to download Opportunity Zone file from {OZ_URL_2018}: "
+                f"connection/DNS/timeout error ({type(e).__name__}: {e})"
+            ) from e
 
     try:
         df = pd.read_excel(
@@ -269,15 +329,27 @@ def load_opportunity_zones(force: bool = False) -> set:
                 tracts = set(df[col].dropna().str.strip().str.zfill(11).tolist())
                 print(f"Loaded {len(tracts):,} Opportunity Zone tracts")
                 return tracts
-        print("OZ file parse error: tract column not found. Using sample data.")
+    except OZDataError:
+        raise
     except Exception as e:
-        print(f"OZ file parse error: {e}. Using sample data.")
+        raise OZParseError(
+            f"Failed to parse Opportunity Zone file {path}: {type(e).__name__}: {e}"
+        ) from e
 
-    return _sample_oz_tracts()
+    # File parsed, but none of the known tract columns were present — fail loud
+    # rather than degrade to the 6-tract sample (F3).
+    raise OZParseError(
+        f"Opportunity Zone file {path} parsed but no tract column was found "
+        f"(looked for CENSUS TRACT NUMBER / GEOID / CENSUS_TRACT / TRACT_ID / TRACT)."
+    )
 
 
 def _sample_oz_tracts() -> set:
-    """Known OZ tracts for testing — subset of real designations."""
+    """6 known OZ tracts — EXPLICIT opt-in only (used by NMTCMapper.from_sample()).
+
+    As of 0.3.4 this is never reached from a download/parse failure path; OZ
+    failures raise OZDownloadError / OZParseError instead of degrading to this set.
+    """
     return {
         "17031840100",  # Chicago South Side
         "17031839100",  # Chicago West Side

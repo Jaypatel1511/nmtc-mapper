@@ -54,6 +54,44 @@ get results in seconds, using the same official data source.
 
 ---
 
+## Failure behavior & offline / demo mode
+
+`NMTCMapper()` downloads the official CDFI Fund eligibility and Opportunity Zone
+files (cached under `~/.nmtcmapper/cache`). As of **0.3.4** it **fails loud**: if
+a download or parse fails, it raises a typed error instead of silently
+substituting demo data. (Before 0.3.4 any failure silently fell back to a
+12-tract synthetic sample, which could report a real, eligible tract as
+"ineligible" — see the CHANGELOG.)
+
+    from nmtcmapper import NMTCMapper, NMTCMapperError
+
+    try:
+        mapper = NMTCMapper()
+    except NMTCMapperError as e:
+        # Blocked network, moved URL, corrupt file, etc. — never a fabricated answer.
+        print(f"Could not load real NMTC data: {e}")
+        raise
+
+The exception hierarchy (`NMTCMapperError` → `EligibilityDataError` /
+`OZDataError` → specific `*DownloadError` / `*ParseError` leaves) is exported
+from the top level, so you can catch broadly or precisely.
+
+**Explicit demo / offline data** — for examples, tests, or an air-gapped demo,
+opt in to the synthetic sample dataset. This performs **no network calls** and
+stamps the mapper so you can tell demo answers from real ones:
+
+    from nmtcmapper import NMTCMapper, load_sample_table
+
+    mapper = NMTCMapper.from_sample()   # 12 sample tracts + 6 OZ tracts, offline
+    print(mapper.data_source)           # "sample"   (real data → "cdfi_fund")
+
+    df = load_sample_table()            # the raw 12-tract sample frame
+
+> ⚠️ Sample data is 12 synthetic-vintage tracts for demos and tests. It is
+> **never** valid for a real NMTC eligibility answer.
+
+---
+
 ## Eligibility Rules (2016-2020 ACS — mandatory since Sept 1, 2024)
 
 A census tract qualifies as a Low-Income Community (LIC) if it meets ANY of:
@@ -99,7 +137,8 @@ After running .enrich(), your DataFrame will have:
 
     PYTHONPATH=. pytest tests/ -v
 
-24 tests across all modules.
+44 tests across all modules (including fail-loud and explicit-sample-mode
+coverage added in 0.3.4).
 
 ---
 

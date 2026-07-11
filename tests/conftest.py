@@ -1,22 +1,23 @@
 import pytest
 import pandas as pd
-from nmtcmapper.data.loader import _build_sample_table
+from nmtcmapper.data.loader import load_sample_table
 from nmtcmapper.mapper import NMTCMapper
 
 
 @pytest.fixture
 def sample_table():
-    return _build_sample_table()
+    return load_sample_table()
 
 
 @pytest.fixture
-def mapper(monkeypatch):
-    """NMTCMapper with sample data — no real download."""
-    monkeypatch.setattr(
-        "nmtcmapper.data.loader.download_eligibility_file",
-        lambda force=False: None
-    )
-    return NMTCMapper()
+def mapper():
+    """NMTCMapper on the sanctioned offline sample data — zero network.
+
+    Previously this monkeypatched download_eligibility_file to return None, which
+    only produced a working mapper *because* of the silent sample-fallback bug
+    fixed in 0.3.4. Now it uses the explicit from_sample() constructor.
+    """
+    return NMTCMapper.from_sample()
 
 
 @pytest.fixture

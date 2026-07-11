@@ -4,7 +4,10 @@ NMTCMapper — main public API for NMTC eligibility checking.
 import pandas as pd
 from typing import Optional
 
-from nmtcmapper.data.loader import load_eligibility_table, load_opportunity_zones
+from nmtcmapper.data.loader import (
+    load_eligibility_table, load_opportunity_zones,
+    load_sample_table, _sample_oz_tracts,
+)
 from nmtcmapper.geocoder.census import geocode_address, geocode_batch
 from nmtcmapper.eligibility.checker import (
     check_tract, enrich_dataframe, EligibilityResult
@@ -32,7 +35,12 @@ class NMTCMapper:
 
     def __init__(self, force_reload: bool = False):
         """
-        Initialize NMTCMapper and load the eligibility table.
+        Initialize NMTCMapper against the real CDFI Fund data.
+
+        Raises on any download or parse failure (EligibilityDownloadError /
+        EligibilityParseError / OZDownloadError / OZParseError) rather than
+        silently substituting demo data. For offline demos/tests, use the
+        explicit ``NMTCMapper.from_sample()`` constructor instead.
 
         Args:
             force_reload: Re-download the eligibility file even if cached
@@ -42,6 +50,29 @@ class NMTCMapper:
         print(f"Ready. {len(self._table):,} census tracts loaded.")
         self._oz_tracts = load_opportunity_zones()
         print(f"Opportunity Zones loaded: {len(self._oz_tracts):,} tracts")
+        self.data_source = "cdfi_fund"
+
+    @classmethod
+    def from_sample(cls) -> "NMTCMapper":
+        """
+        Construct a mapper on the built-in synthetic sample data — no network.
+
+        WARNING: the sample is 12 synthetic-vintage tracts (+ 6 OZ tracts) for
+        demos, examples, and tests. It is NEVER valid for a real NMTC eligibility
+        answer. The resulting mapper is stamped ``data_source == "sample"`` so
+        downstream code can assert provenance. Use ``NMTCMapper()`` for real data.
+        """
+        obj = cls.__new__(cls)
+        obj._table = load_sample_table()
+        obj._oz_tracts = _sample_oz_tracts()
+        obj.data_source = "sample"
+        return obj
+
+    def __repr__(self) -> str:
+        return (
+            f"NMTCMapper(data_source={self.data_source!r}, "
+            f"tracts={len(self._table):,}, oz_tracts={len(self._oz_tracts):,})"
+        )
 
     def check_address(self, address: str) -> EligibilityResult:
         """

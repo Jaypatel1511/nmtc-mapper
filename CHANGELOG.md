@@ -2,7 +2,62 @@
 
 All notable changes to nmtc-mapper are documented here.
 
+## [0.3.4] — 2026-07-11
+
+### Fixed — fail loud, never fabricate (this is a correctness release)
+- **Silent sample-data substitution removed from every failure path.** In
+  0.1.0–0.3.3 the loader silently substituted a 12-tract synthetic sample dataset
+  on ANY eligibility download or parse failure, and a 6-tract OZ sample on ANY OZ
+  download or parse failure. Results computed in that state were **fabricated** —
+  an eligibility check against a real tract could return a false "ineligible"
+  (the tract simply wasn't in the 12-row sample), and no signal ever reached the
+  caller. Five distinct fabrication paths are now killed:
+  1. eligibility download failure (`loader.py` download step) — was `return None`
+     → 12-tract sample; now raises `EligibilityDownloadError`.
+  2. eligibility missing-file / download-skipped branch — was 12-tract sample;
+     now raises `EligibilityDownloadError`.
+  3. eligibility parse failure (corrupt bytes, HTML error page, bad zip) — was
+     12-tract sample; now raises `EligibilityParseError`.
+  4. OZ download failure — was 6-tract sample; now raises `OZDownloadError`.
+  5. OZ parse failure (corrupt file **or** missing tract column) — was 6-tract
+     sample; now raises `OZParseError`.
+
+### Added
+- **Typed exception hierarchy** (`nmtcmapper/exceptions.py`), exported from the
+  package top level:
+  `NMTCMapperError` → `EligibilityDataError` → {`EligibilityDownloadError`,
+  `EligibilityParseError`}, and `OZDataError` → {`OZDownloadError`,
+  `OZParseError`}. Messages name the URL attempted and distinguish access-blocked
+  (403 / connection / DNS / timeout) from not-found (404) from parse failure, and
+  chain the original exception (`raise ... from e`). Catch at any level:
+  `except NMTCMapperError` for anything, or a specific leaf.
+- **Explicit sample mode.** `_build_sample_table()` is promoted to the public
+  `load_sample_table()` (the underscore name is kept as an alias for the existing
+  notebook import), and `NMTCMapper.from_sample()` constructs a mapper on the 12
+  sample tracts + 6 OZ sample tracts with **zero network calls**. Sample data is
+  now an opt-in demo path only — never a runtime fallback.
+- **Provenance marker.** Every mapper carries a `data_source` attribute
+  (`"cdfi_fund"` for the real constructor, `"sample"` for `from_sample()`),
+  surfaced in `repr(mapper)`, so downstream code can assert it never shipped a
+  demo answer as real.
+
+### Known issues
+- **Fabrication moves downstream, not gone from the ecosystem.** The flagship
+  `nmtc-application-builder` adapter (`nmtc_mapper_adapter.py`) wraps mapper
+  construction in a bare `except Exception` and substitutes its own 20-tract
+  `_FALLBACK_ELIGIBILITY`. Now that this package raises typed errors instead of
+  fabricating, that adapter will catch them and fabricate in its place — until
+  the adapter is fixed in a separate cycle (catch the typed errors, surface them
+  honestly, and remove both the `redirect_stdout` suppression and the
+  geocode-failure fabricated-positive). No change is made to that repo here.
+- **Out of scope, deferred to 0.3.5:** the geocoder failure-swallow in
+  `geocoder/census.py`, and schema/column-shift validation of the CDFI Fund file.
+
 ## [0.3.3] — 2026-06-23
+<!-- [correction 2026-07: the "publishes to PyPI via an OIDC Trusted Publisher"
+     line below describes the *intended* pipeline, but 0.3.3 itself was published
+     manually with no attestations. The OIDC Trusted-Publisher pipeline first
+     runs for 0.3.4. History is annotated, not rewritten.] -->
 
 ### Changed
 - **`__version__` is now derived from installed package metadata** via

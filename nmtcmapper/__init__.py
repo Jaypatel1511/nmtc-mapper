@@ -1,7 +1,12 @@
 from nmtcmapper.mapper import NMTCMapper
 from nmtcmapper.eligibility.checker import EligibilityResult
-from nmtcmapper.data.loader import load_eligibility_table
+from nmtcmapper.data.loader import load_eligibility_table, load_sample_table
 from nmtcmapper.geocoder.census import geocode_address
+from nmtcmapper.exceptions import (
+    NMTCMapperError,
+    EligibilityDataError, EligibilityDownloadError, EligibilityParseError,
+    OZDataError, OZDownloadError, OZParseError,
+)
 
 from importlib.metadata import version, PackageNotFoundError
 
@@ -12,5 +17,8 @@ except PackageNotFoundError:
 
 __all__ = [
     "NMTCMapper", "EligibilityResult",
-    "load_eligibility_table", "geocode_address",
+    "load_eligibility_table", "load_sample_table", "geocode_address",
+    "NMTCMapperError",
+    "EligibilityDataError", "EligibilityDownloadError", "EligibilityParseError",
+    "OZDataError", "OZDownloadError", "OZParseError",
 ]
