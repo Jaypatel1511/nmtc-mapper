@@ -1,19 +1,26 @@
 """
 Download and cache the CDFI Fund NMTC eligibility file.
-Builds a lookup table of all eligible census tracts.
+Builds a lookup table of the FULL census-tract universe (85,395 tracts: 35,167
+eligible + 50,228 ineligible), each carrying an explicit YES/NO LIC flag. A
+tract ABSENT from this table is therefore unknown/indeterminate, not ineligible.
 """
 import os
+import re
 import requests
 import pandas as pd
 from pathlib import Path
 
 from nmtcmapper.exceptions import (
     EligibilityDataError, EligibilityDownloadError, EligibilityParseError,
+    EligibilitySchemaError, EligibilityValueError,
     OZDataError, OZDownloadError, OZParseError,
 )
 from nmtcmapper.data.schema import (
     CACHE_DIR, CDFI_FUND_LIC_URL_2020,
     ELIGIBILITY_FILE_COLUMNS,
+    ELIGIBILITY_XLSB_SHEET, ELIGIBILITY_XLSB_COLUMN_COUNT,
+    ELIGIBILITY_XLSB_EXPECTED_HEADERS, ELIGIBILITY_MIN_ROWS,
+    ELIGIBILITY_VALUE_BOUNDS,
     LIC_POVERTY_RATE_THRESHOLD,
     LIC_AMI_RATIO_METRO_THRESHOLD,
     LIC_AMI_RATIO_RURAL_THRESHOLD,
@@ -22,6 +29,53 @@ from nmtcmapper.data.schema import (
     DEEP_POVERTY_THRESHOLD, DEEP_AMI_THRESHOLD,
     DEEP_UNEMPLOYMENT_MULTIPLIER,
 )
+
+
+def _normalize_header(value) -> str:
+    """Collapse internal whitespace, strip, and casefold a header cell."""
+    return re.sub(r"\s+", " ", str(value)).strip().casefold()
+
+
+def _validate_xlsb_header(header_vals: list) -> None:
+    """Fail loud (EligibilitySchemaError) BEFORE any row is parsed if the live
+    .xlsb structure does not match the expected CDFI Fund layout.
+
+    The loader binds columns positionally, so a wrong column count or a
+    renamed/re-ordered column at a bound index must be caught here — otherwise a
+    poverty rate could be read out of the MFI slot and every verdict would be
+    silently wrong."""
+    n = len(header_vals)
+    if n != ELIGIBILITY_XLSB_COLUMN_COUNT:
+        raise EligibilitySchemaError(
+            f"eligibility .xlsb header has {n} columns, expected "
+            f"{ELIGIBILITY_XLSB_COLUMN_COUNT}. The column layout has changed — "
+            f"the positional bind can no longer be trusted."
+        )
+    for idx, expected in ELIGIBILITY_XLSB_EXPECTED_HEADERS.items():
+        actual = header_vals[idx] if idx < n else None
+        if _normalize_header(actual) != _normalize_header(expected):
+            raise EligibilitySchemaError(
+                f"eligibility .xlsb header mismatch at column index {idx}: "
+                f"expected {expected!r}, got {actual!r}. The loader binds columns "
+                f"positionally, so a renamed/re-ordered column would be read "
+                f"against the wrong field."
+            )
+
+
+def _check_value_bounds(field: str, value, row_index: int) -> None:
+    """Raise EligibilityValueError if a numeric value is implausible (Fix 6).
+
+    None (an 'NA' cell) is a legitimate null — it is NEVER bounds-checked."""
+    if value is None:
+        return
+    lo, hi = ELIGIBILITY_VALUE_BOUNDS[field]
+    if not (lo <= value <= hi):
+        raise EligibilityValueError(
+            f"{field} out of plausible bounds at data row {row_index}: value "
+            f"{value!r} not in [{lo}, {hi}]. (ami_ratio is stored as a FRACTION "
+            f"~0.9; a value near percent scale ~91 signals an upstream 100x "
+            f"scale flip that would break every AMI comparison.)"
+        )
 
 
 def get_cache_dir() -> Path:
@@ -122,25 +176,36 @@ def _load_xlsb_table(path: Path) -> pd.DataFrame:
             "Install it with: pip install pyxlsb"
         )
 
+    def _num(v):
+        # bool is an int subclass — exclude it so a stray YES/NO never divides.
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
     records = []
     with pyxlsb.open_workbook(str(path)) as wb:
-        with wb.get_sheet("2016-2020") as sheet:
+        with wb.get_sheet(ELIGIBILITY_XLSB_SHEET) as sheet:
             for i, row in enumerate(sheet.rows()):
-                if i == 0:
-                    continue
                 vals = [c.v for c in row]
+                if i == 0:
+                    # Validate structure BEFORE trusting any positional bind.
+                    _validate_xlsb_header(vals)
+                    continue
                 if not vals[0]:
                     continue
 
                 geoid        = str(vals[0]).strip().zfill(11)
                 non_metro    = str(vals[1]).strip().upper() != "METRO"
                 lic_elig     = str(vals[2]).strip().upper() == "YES"
-                poverty_rate = (vals[3] / 100) if isinstance(vals[3], (int, float)) else None
-                ami_ratio    = vals[5]          if isinstance(vals[5], (int, float)) else None
-                unemp_rate   = (vals[7] / 100) if isinstance(vals[7], (int, float)) else None
+                poverty_rate = (_num(vals[3]) / 100) if _num(vals[3]) is not None else None
+                ami_ratio    = _num(vals[5])
+                unemp_rate   = (_num(vals[7]) / 100) if _num(vals[7]) is not None else None
                 high_migr    = str(vals[13]).strip().upper() == "YES"
                 severe       = str(vals[14]).strip().upper() == "YES"
                 deep         = str(vals[15]).strip().upper() == "YES"
+
+                # Value plausibility (Fix 6) — on the STORED value; None passes.
+                _check_value_bounds("poverty_rate", poverty_rate, i)
+                _check_value_bounds("ami_ratio", ami_ratio, i)
+                _check_value_bounds("unemployment_rate", unemp_rate, i)
 
                 if deep:
                     dlevel = "deep"
@@ -164,6 +229,15 @@ def _load_xlsb_table(path: Path) -> pd.DataFrame:
                     "severe_distress":       severe,
                     "deep_distress":         deep,
                 })
+
+    # Row-count floor: a degenerate/near-empty parse must raise, not yield an
+    # (almost) empty table that would silently mark real tracts "not found".
+    if len(records) < ELIGIBILITY_MIN_ROWS:
+        raise EligibilitySchemaError(
+            f"eligibility .xlsb parsed only {len(records)} data rows, below the "
+            f"floor of {ELIGIBILITY_MIN_ROWS} (live file has 85,395). This is a "
+            f"degenerate parse, not a usable table."
+        )
 
     df = pd.DataFrame(records).set_index("tract_id")
     print(f"Eligibility table loaded: {len(df):,} census tracts")

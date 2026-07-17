@@ -2,6 +2,63 @@
 
 All notable changes to nmtc-mapper are documented here.
 
+## [0.4.0] — 2026-07-16
+
+Fail-loud + tri-state eligibility. **This release contains breaking changes** —
+functions that used to return a value now raise, and `nmtc_eligible` becomes
+`Optional[bool]`. Per 0.x semver, breaking changes ship in a minor.
+
+### Breaking
+- **`nmtc_eligible` is now tri-state `Optional[bool]`.** `True` = verified
+  eligible, `False` = verified ineligible (the table explicitly says NO),
+  `None` = **INDETERMINATE** (geocode no-match, or a tract absent from the
+  ~85k-tract universe). A `None` verdict must never be read as a falsy
+  "ineligible" — an indeterminate result rendered as `False` is a fabricated
+  VERIFIED INELIGIBLE. `distress_level` gains a `"unknown"` value and
+  `EligibilityResult` gains a `tract_found` field and an `eligibility_status`
+  property (verified-eligible / verified-ineligible / not-found / geocode-failed).
+- **The geocoder no longer collapses every failure into `None`.**
+  `geocode_address` (and the async `_geocode_single_async`) now:
+  - raise `GeocoderTransportError` on transport/HTTP-status/decode failure after
+    retries (403 / 5xx / timeout / connection / bad-JSON, each with a
+    distinguishable message naming the address);
+  - raise `AmbiguousAddressError` when an address matches multiple **different**
+    census tracts (matches that all agree on one tract still succeed);
+  - return `None` **only** for a genuine no-match (HTTP 200, zero matches).
+- **`check_tract` / `check_address` lookup-miss now indeterminate.** An absent
+  tract yields `nmtc_eligible=None`, `distress_level="unknown"`, metrics `None`,
+  `tract_found=False` — not `False`/`"ineligible"`. `check_address` on a genuine
+  geocode no-match yields the same with `geocode_success=False`; typed geocoder
+  errors propagate rather than being swallowed into a result.
+- **`enrich_dataframe` carries the tri-state** (absent tract → `None`/`"unknown"`,
+  not `False`) and adds an additive `eligibility_status` column. `eligible_count`
+  no longer counts indeterminate rows as ineligible and reports an
+  `indeterminate` tally.
+
+### Added
+- **New typed exceptions, all under `NMTCMapperError`:**
+  `EligibilitySchemaError`, `EligibilityValueError`, `GeocoderError` →
+  {`GeocoderTransportError`, `AmbiguousAddressError`}.
+- **Schema validation at load (.xlsb path).** Before any row is trusted the
+  loader checks the column count (16), the header strings at every
+  positionally-bound index (normalized: whitespace-collapsed, casefolded), and a
+  row-count floor — raising `EligibilitySchemaError` naming the offending index,
+  expected, and actual. The positional bind can no longer read a poverty rate out
+  of the MFI slot silently.
+- **Value plausibility bounds.** Parsed numerics are range-checked against bounds
+  derived from all 85,395 live rows: `poverty_rate` and `unemployment_rate`
+  (stored ÷100) in `[0, 1]`; `ami_ratio` (stored as a FRACTION) in `[0, 10]` — the
+  upper bound clears the real max (5.162) yet trips an upstream percent-scale flip
+  (0.9127 → 91.27), a silent 100× error in every AMI comparison. An `'NA'` cell
+  remains a legitimate null and is never bounds-checked.
+- **`LICENSE`** (MIT) added.
+
+### Fixed
+- `summary()` renders an indeterminate result distinctly (inline qualifier on the
+  NMTC Eligible line) instead of the fabricated `❌ NO`.
+- `loader.py` module docstring corrected: the table is the FULL universe
+  (35,167 eligible + 50,228 ineligible), not "all eligible census tracts".
+
 ## [0.3.4] — 2026-07-11
 
 ### Fixed — fail loud, never fabricate (this is a correctness release)
@@ -50,13 +107,26 @@ All notable changes to nmtc-mapper are documented here.
   the adapter is fixed in a separate cycle (catch the typed errors, surface them
   honestly, and remove both the `redirect_stdout` suppression and the
   geocode-failure fabricated-positive). No change is made to that repo here.
+
+  > **Correction (0.4.0, 2026-07-16):** the claim above that the flagship adapter
+  > "will catch them and fabricate in its place" was true only *before* the
+  > adapter's 1.1.5 release. As of `nmtc-application-builder` 1.1.5 the adapter no
+  > longer fabricates — it catches the typed errors and surfaces them honestly,
+  > and the `redirect_stdout` suppression and geocode-failure fabricated-positive
+  > are gone. The note above is retained for history but **no longer describes
+  > current behavior**; it should not be read as an ongoing accusation against a
+  > package that is already fixed.
 - **Out of scope, deferred to 0.3.5:** the geocoder failure-swallow in
   `geocoder/census.py`, and schema/column-shift validation of the CDFI Fund file.
   A geocode failure or an unknown/malformed tract ID still returns a normal result with
   `nmtc_eligible=False` / `distress_level="ineligible"` rather than raising — only
   `geocode_success=False` distinguishes it, and `enrich()` output carries no such flag.
   Treat "ineligible" as unverified unless `geocode_success` is True and the tract was found.
-  Fix deferred to 0.3.5 alongside the census.py work.
+
+  > **Resolved (0.4.0):** both were fixed in 0.4.0, not 0.3.5 — the geocoder now
+  > raises typed `GeocoderTransportError` / `AmbiguousAddressError`, a lookup miss
+  > is `None`/`"unknown"` (never `False`/`"ineligible"`), and `enrich()` carries an
+  > `eligibility_status` column.
 
 ## [0.3.3] — 2026-06-23
 

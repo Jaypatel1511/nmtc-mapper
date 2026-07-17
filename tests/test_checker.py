@@ -14,9 +14,11 @@ def test_check_known_ineligible_tract(sample_table):
 
 
 def test_check_unknown_tract(sample_table):
+    # 0.4.0 tri-state: an absent tract is INDETERMINATE, not "ineligible".
     result = check_tract("99999999999", sample_table)
-    assert result["nmtc_eligible"] == False
-    assert result["distress_level"] == "ineligible"
+    assert result["nmtc_eligible"] is None
+    assert result["distress_level"] == "unknown"
+    assert result["tract_found"] is False
 
 
 def test_enrich_dataframe(sample_table, sample_df):

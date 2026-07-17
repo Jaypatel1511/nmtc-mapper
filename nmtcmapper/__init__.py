@@ -5,7 +5,9 @@ from nmtcmapper.geocoder.census import geocode_address
 from nmtcmapper.exceptions import (
     NMTCMapperError,
     EligibilityDataError, EligibilityDownloadError, EligibilityParseError,
+    EligibilitySchemaError, EligibilityValueError,
     OZDataError, OZDownloadError, OZParseError,
+    GeocoderError, GeocoderTransportError, AmbiguousAddressError,
 )
 
 from importlib.metadata import version, PackageNotFoundError
@@ -20,5 +22,7 @@ __all__ = [
     "load_eligibility_table", "load_sample_table", "geocode_address",
     "NMTCMapperError",
     "EligibilityDataError", "EligibilityDownloadError", "EligibilityParseError",
+    "EligibilitySchemaError", "EligibilityValueError",
     "OZDataError", "OZDownloadError", "OZParseError",
+    "GeocoderError", "GeocoderTransportError", "AmbiguousAddressError",
 ]

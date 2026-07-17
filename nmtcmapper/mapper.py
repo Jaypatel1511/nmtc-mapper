@@ -88,33 +88,38 @@ class NMTCMapper:
         Returns:
             EligibilityResult with eligibility flags and tract data
         """
+        # geocode_address raises typed geocoder errors (GeocoderTransportError /
+        # AmbiguousAddressError) — DO NOT catch them here; let them propagate so
+        # a caller can tell a real failure from a real answer (Fix 2). A genuine
+        # no-match returns None.
         tract_id = geocode_address(address)
-        geocode_success = tract_id is not None
 
-        if tract_id:
-            data = check_tract(tract_id, self._table)
-        else:
-            data = {
-                "nmtc_eligible": False,
-                "distress_level": "ineligible",
-                "poverty_rate": None,
-                "ami_ratio": None,
-                "unemployment_rate": None,
-                "is_non_metro": False,
-                "is_high_migration_rural": False,
-                "is_nmtc_native_area": False,
-                "severe_distress": False,
-                "deep_distress": False,
-            }
+        if tract_id is None:
+            # Genuine no-match -> INDETERMINATE, never False/"ineligible".
+            return EligibilityResult(
+                address=address,
+                tract_id=None,
+                geocode_success=False,
+                tract_found=False,
+                nmtc_eligible=None,
+                distress_level="unknown",
+                poverty_rate=None,
+                ami_ratio=None,
+                unemployment_rate=None,
+                is_non_metro=False,
+                is_high_migration_rural=False,
+                is_nmtc_native_area=False,
+                severe_distress=False,
+                deep_distress=False,
+                is_opportunity_zone=False,
+            )
 
-        if tract_id:
-            data["is_opportunity_zone"] = tract_id in self._oz_tracts
-        else:
-            data["is_opportunity_zone"] = False
+        data = check_tract(tract_id, self._table)
+        data["is_opportunity_zone"] = tract_id in self._oz_tracts
         return EligibilityResult(
             address=address,
             tract_id=tract_id,
-            geocode_success=geocode_success,
+            geocode_success=True,
             **data,
         )
 
@@ -186,19 +191,27 @@ class NMTCMapper:
             raise ValueError("Run .enrich() first to add eligibility columns.")
 
         total = len(df)
-        eligible = df["nmtc_eligible"].sum()
-        deep = (df["distress_level"] == "deep").sum()
-        severe = (df["distress_level"] == "severe").sum()
-        lic = (df["distress_level"] == "lic").sum()
+        # Tri-state sweep: nmtc_eligible is Optional[bool] and the column can
+        # hold None. Count each state EXPLICITLY — never `total - eligible`,
+        # which would fold every indeterminate (None) row into "ineligible" and
+        # fabricate a verified-ineligible tally.
+        col = df["nmtc_eligible"]
+        eligible = int((col == True).sum())
+        ineligible = int((col == False).sum())
+        indeterminate = int(total - eligible - ineligible)  # None / not-found / geocode-failed
+        deep = int((df["distress_level"] == "deep").sum())
+        severe = int((df["distress_level"] == "severe").sum())
+        lic = int((df["distress_level"] == "lic").sum())
 
         result = {
             "total": total,
-            "nmtc_eligible": int(eligible),
+            "nmtc_eligible": eligible,
             "pct_eligible": round(eligible / total * 100, 1) if total else 0,
-            "deep_distress": int(deep),
-            "severe_distress": int(severe),
-            "lic_only": int(lic),
-            "ineligible": int(total - eligible),
+            "deep_distress": deep,
+            "severe_distress": severe,
+            "lic_only": lic,
+            "ineligible": ineligible,
+            "indeterminate": indeterminate,
         }
 
         print(f"\nNMTC Eligibility Summary")
@@ -208,7 +221,8 @@ class NMTCMapper:
         print(f"  ── Deep Distress:   {deep:,}")
         print(f"  ── Severe Distress: {severe:,}")
         print(f"  ── LIC Only:        {lic:,}")
-        print(f"  Not Eligible:       {total - eligible:,}")
+        print(f"  Not Eligible:       {ineligible:,}")
+        print(f"  Indeterminate:      {indeterminate:,} (no match / tract absent — NOT ineligible)")
         print()
         return result
 

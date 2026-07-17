@@ -16,12 +16,76 @@ from nmtcmapper.data.schema import (
     CENSUS_GEOCODER_URL,
     CENSUS_GEOCODER_BATCH_URL,
 )
+from nmtcmapper.exceptions import (
+    GeocoderTransportError, AmbiguousAddressError,
+)
 
 # Rate limiting
 MAX_CONCURRENT_REQUESTS = 10
 REQUEST_TIMEOUT         = 15
 MAX_RETRIES             = 3
 RETRY_BACKOFF           = 2.0   # seconds
+
+
+def _geocoder_params(address: str) -> dict:
+    return {
+        "street":    _parse_street(address),
+        "city":      _parse_city(address),
+        "state":     _parse_state(address),
+        "zip":       _parse_zip(address),
+        "benchmark": "Public_AR_Current",
+        "vintage":   "Current_Current",
+        "layers":    "Census Tracts",
+        "format":    "json",
+    }
+
+
+def _extract_tract_from_data(data: dict, address: str) -> Optional[str]:
+    """Interpret a decoded HTTP-200 geocoder response body (0.4.0 contract).
+
+    - zero address matches            -> None  (genuine no-match; this is the
+                                         ONLY thing None means now)
+    - one or more matches, all of
+      which resolve to the SAME tract -> that 11-digit FIPS tract
+    - matches resolving to DIFFERENT
+      tracts                          -> raise AmbiguousAddressError (never
+                                         silently take matches[0])
+
+    A 200 whose matches carry no resolvable Census-Tract geography also yields
+    None — there is no tract to return and it is not a transport failure.
+    """
+    matches = data.get("result", {}).get("addressMatches", [])
+    if not matches:
+        return None
+
+    tracts = []
+    for m in matches:
+        geo = m.get("geographies", {})
+        tract_recs = geo.get("Census Tracts", [])
+        if not tract_recs:
+            continue
+        state  = tract_recs[0].get("STATE", "")
+        county = tract_recs[0].get("COUNTY", "")
+        tract  = tract_recs[0].get("TRACT", "")
+        if state and county and tract:
+            tracts.append(f"{state}{county}{tract}")
+
+    distinct = sorted(set(tracts))
+    if not distinct:
+        return None
+    if len(distinct) == 1:
+        return distinct[0]
+    raise AmbiguousAddressError(
+        f"Address {address!r} geocoded to {len(matches)} matches resolving to "
+        f"different census tracts {distinct}; refusing to guess which is correct."
+    )
+
+
+def _transport_message(kind: str, detail: str, address: str) -> str:
+    return (
+        f"Census geocoder request failed ({kind}) for address {address!r} "
+        f"after {MAX_RETRIES + 1} attempts: {detail}"
+    )
 
 
 async def _geocode_single_async(
@@ -40,20 +104,15 @@ async def _geocode_single_async(
         retries:   Number of retries on failure
 
     Returns:
-        11-digit FIPS code or None
+        11-digit FIPS code, or None for a genuine no-match (HTTP 200, zero
+        matches). Raises GeocoderTransportError on transport/HTTP/decode failure
+        after retries, and AmbiguousAddressError on conflicting matches — the
+        same three-way contract as the sync ``geocode_address``.
     """
-    params = {
-        "street":    _parse_street(address),
-        "city":      _parse_city(address),
-        "state":     _parse_state(address),
-        "zip":       _parse_zip(address),
-        "benchmark": "Public_AR_Current",
-        "vintage":   "Current_Current",
-        "layers":    "Census Tracts",
-        "format":    "json",
-    }
+    params = _geocoder_params(address)
 
     async with semaphore:
+        last_kind = last_detail = None
         for attempt in range(retries + 1):
             try:
                 async with session.get(
@@ -63,29 +122,32 @@ async def _geocode_single_async(
                 ) as response:
                     response.raise_for_status()
                     data = await response.json()
-
-                    matches = data.get("result", {}).get("addressMatches", [])
-                    if not matches:
-                        return None
-
-                    geo    = matches[0].get("geographies", {})
-                    tracts = geo.get("Census Tracts", [])
-                    if not tracts:
-                        return None
-
-                    state  = tracts[0].get("STATE", "")
-                    county = tracts[0].get("COUNTY", "")
-                    tract  = tracts[0].get("TRACT", "")
-
-                    if state and county and tract:
-                        return f"{state}{county}{tract}"
-                    return None
-
-            except Exception:
-                if attempt < retries:
-                    await asyncio.sleep(RETRY_BACKOFF * (attempt + 1))
+            except aiohttp.ClientResponseError as e:
+                status = e.status
+                if status == 403:
+                    last_kind, last_detail = "HTTP 403 Forbidden", "access blocked"
+                elif status and status >= 500:
+                    last_kind, last_detail = f"HTTP {status} server error", str(e)
                 else:
-                    return None
+                    last_kind, last_detail = f"HTTP {status}", str(e)
+            except asyncio.TimeoutError as e:
+                last_kind, last_detail = "timeout", f"request timed out after {REQUEST_TIMEOUT}s"
+            except aiohttp.ClientError as e:
+                last_kind, last_detail = "connection/DNS", f"{type(e).__name__}: {e}"
+            except ValueError as e:
+                # aiohttp/json: non-JSON or truncated body (e.g. an HTML error page)
+                last_kind, last_detail = "invalid JSON response", f"{type(e).__name__}: {e}"
+            else:
+                # Clean HTTP 200 with a decoded body: interpret it. AmbiguousAddressError
+                # from here must propagate — it is not a transport failure to retry.
+                return _extract_tract_from_data(data, address)
+
+            if attempt < retries:
+                await asyncio.sleep(RETRY_BACKOFF * (attempt + 1))
+
+        raise GeocoderTransportError(
+            _transport_message(last_kind, last_detail, address)
+        )
 
 
 async def _batch_geocode_async(addresses: list) -> list:
@@ -129,19 +191,18 @@ def geocode_address(address: str) -> Optional[str]:
         address: Full address e.g. "1234 S Michigan Ave, Chicago, IL 60605"
 
     Returns:
-        11-digit census tract FIPS code or None
+        11-digit census tract FIPS code, or None for a genuine no-match
+        (HTTP 200, zero address matches). None means EXACTLY that and nothing
+        else. Raises:
+          - GeocoderTransportError on transport/HTTP-status/decode failure after
+            retries are exhausted (403 / 5xx / timeout / connection / bad-JSON,
+            each with a distinguishable message naming the address);
+          - AmbiguousAddressError when the address matches multiple DIFFERENT
+            census tracts.
     """
-    params = {
-        "street":    _parse_street(address),
-        "city":      _parse_city(address),
-        "state":     _parse_state(address),
-        "zip":       _parse_zip(address),
-        "benchmark": "Public_AR_Current",
-        "vintage":   "Current_Current",
-        "layers":    "Census Tracts",
-        "format":    "json",
-    }
+    params = _geocoder_params(address)
 
+    last_kind = last_detail = None
     for attempt in range(MAX_RETRIES + 1):
         try:
             response = requests.get(
@@ -150,29 +211,32 @@ def geocode_address(address: str) -> Optional[str]:
             )
             response.raise_for_status()
             data = response.json()
-
-            matches = data.get("result", {}).get("addressMatches", [])
-            if not matches:
-                return None
-
-            geo    = matches[0].get("geographies", {})
-            tracts = geo.get("Census Tracts", [])
-            if not tracts:
-                return None
-
-            state  = tracts[0].get("STATE", "")
-            county = tracts[0].get("COUNTY", "")
-            tract  = tracts[0].get("TRACT", "")
-
-            if state and county and tract:
-                return f"{state}{county}{tract}"
-            return None
-
-        except Exception:
-            if attempt < MAX_RETRIES:
-                time.sleep(RETRY_BACKOFF * (attempt + 1))
+        except requests.exceptions.HTTPError as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status == 403:
+                last_kind, last_detail = "HTTP 403 Forbidden", "access blocked"
+            elif status and status >= 500:
+                last_kind, last_detail = f"HTTP {status} server error", str(e)
             else:
-                return None
+                last_kind, last_detail = f"HTTP {status}", str(e)
+        except requests.exceptions.Timeout as e:
+            last_kind, last_detail = "timeout", f"request timed out after {REQUEST_TIMEOUT}s"
+        except requests.exceptions.RequestException as e:
+            last_kind, last_detail = "connection/DNS", f"{type(e).__name__}: {e}"
+        except ValueError as e:
+            # response.json() on a non-JSON / truncated body (HTML error page etc.)
+            last_kind, last_detail = "invalid JSON response", f"{type(e).__name__}: {e}"
+        else:
+            # Clean HTTP 200 with a decoded body: interpret it. AmbiguousAddressError
+            # from here must propagate — it is not a transport failure to retry.
+            return _extract_tract_from_data(data, address)
+
+        if attempt < MAX_RETRIES:
+            time.sleep(RETRY_BACKOFF * (attempt + 1))
+
+    raise GeocoderTransportError(
+        _transport_message(last_kind, last_detail, address)
+    )
 
 
 def geocode_batch(

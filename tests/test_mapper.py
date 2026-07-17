@@ -24,9 +24,11 @@ def test_check_tract_ineligible(mapper):
 
 
 def test_check_tract_unknown(mapper):
+    # 0.4.0 tri-state: an absent tract is INDETERMINATE, not "ineligible".
     result = mapper.check_tract("99999999999")
-    assert result.nmtc_eligible == False
-    assert result.distress_level == "ineligible"
+    assert result.nmtc_eligible is None
+    assert result.distress_level == "unknown"
+    assert result.tract_found is False
 
 
 def test_enrich_with_tract_col(mapper, sample_df):
