@@ -4,6 +4,7 @@ Converts addresses to 11-digit census tract FIPS codes.
 Uses asyncio + aiohttp for high-throughput batch geocoding.
 """
 import asyncio
+import warnings
 import aiohttp
 import requests
 import pandas as pd
@@ -154,30 +155,34 @@ async def _batch_geocode_async(addresses: list) -> list:
     """
     Async batch geocode a list of addresses.
 
+    Each address coroutine is awaited EXACTLY ONCE via a single ``gather``.
+    (The prior version wrapped the coroutines in ``create_task`` inside an
+    ``as_completed`` loop that discarded the results, then ``gather``-ed the
+    same coroutine objects — re-awaiting an already-driven coroutine raised
+    ``RuntimeError: cannot reuse already awaited coroutine`` on every batch.)
+
+    Whole-batch abort is intentional (0.4.0): ``gather`` is called WITHOUT
+    ``return_exceptions``, so a geocoder failure in any row propagates as its
+    typed :class:`GeocoderError` and aborts the batch. This is deliberate — the
+    previous silent per-row ``None`` became a fabricated "ineligible"
+    downstream, and losing time is strictly better than losing truth. Per-row
+    failure capture is planned for 0.4.1.
+
     Args:
         addresses: List of address strings
 
     Returns:
-        List of FIPS codes (None for failed lookups) in same order
+        List of FIPS codes (None ONLY for a genuine no-match) in the same order.
+        Raises the typed geocoder error on the first transport/ambiguity failure.
     """
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
-    results   = [None] * len(addresses)
 
     connector = aiohttp.TCPConnector(limit=MAX_CONCURRENT_REQUESTS)
     async with aiohttp.ClientSession(connector=connector) as session:
-        tasks = [
+        results = await asyncio.gather(*(
             _geocode_single_async(session, addr, semaphore)
             for addr in addresses
-        ]
-
-        with tqdm(total=len(tasks), desc="Geocoding", unit="addr") as pbar:
-            for i, coro in enumerate(asyncio.as_completed(
-                {asyncio.create_task(t): i for i, t in enumerate(tasks)}
-            )):
-                pass
-
-        # Run all tasks and preserve order
-        results = await asyncio.gather(*tasks)
+        ))
 
     return list(results)
 
@@ -239,6 +244,15 @@ def geocode_address(address: str) -> Optional[str]:
     )
 
 
+def _event_loop_is_running() -> bool:
+    """True if called from inside a running asyncio event loop (e.g. Jupyter)."""
+    try:
+        asyncio.get_running_loop()
+        return True
+    except RuntimeError:
+        return False
+
+
 def geocode_batch(
     df: pd.DataFrame,
     address_col: str = "address",
@@ -246,7 +260,14 @@ def geocode_batch(
     use_async: bool = True,
 ) -> pd.DataFrame:
     """
-    Geocode a batch of addresses using async processing.
+    Geocode a batch of addresses.
+
+    Uses ``asyncio.run`` for the concurrent path. If called from inside an
+    already-running event loop (e.g. a Jupyter cell), ``asyncio.run`` cannot be
+    used, so this falls back to the SYNC per-row path with a warning — identical
+    results, only slower. It does NOT reach for ``nest_asyncio``: that is an
+    undeclared dependency, and a running-loop context is a performance fallback,
+    not a correctness failure that warrants a typed error or a new dependency.
 
     Args:
         df:          DataFrame with address column
@@ -261,24 +282,29 @@ def geocode_batch(
     addresses = df[address_col].tolist()
     total = len(addresses)
 
-    print(f"Geocoding {total:,} addresses "
-          f"({'async' if use_async else 'sync'})...")
+    run_async = use_async and total > 1
+    if run_async and _event_loop_is_running():
+        warnings.warn(
+            "geocode_batch: an event loop is already running (e.g. inside a "
+            "Jupyter cell or an async app); falling back to the synchronous "
+            "geocoder for this batch. Results are identical, only slower.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        run_async = False
 
-    if use_async and total > 1:
-        # Process in chunks to avoid memory issues
+    print(f"Geocoding {total:,} addresses "
+          f"({'async' if run_async else 'sync'})...")
+
+    if run_async:
+        # Process in chunks to avoid memory issues. A geocoder failure in any
+        # chunk aborts the whole batch (see _batch_geocode_async) — 0.4.0.
         all_results = []
         for start in range(0, total, batch_size):
             chunk = addresses[start:start + batch_size]
             print(f"  Chunk {start//batch_size + 1}: "
                   f"rows {start}–{min(start+batch_size, total)}")
-            try:
-                results = asyncio.run(_batch_geocode_async(chunk))
-            except RuntimeError:
-                # Already in event loop (e.g. Jupyter)
-                import nest_asyncio
-                nest_asyncio.apply()
-                results = asyncio.run(_batch_geocode_async(chunk))
-            all_results.extend(results)
+            all_results.extend(asyncio.run(_batch_geocode_async(chunk)))
         df["tract_id"] = all_results
     else:
         tract_ids = []

@@ -48,7 +48,11 @@ class EligibilityResult:
             return "geocode-failed"
         if not self.tract_found:
             return "not-found"
-        # tract_found is True here, so nmtc_eligible is a real bool (never None).
+        # Guard None FIRST, exactly as summary() does: an indeterminate verdict
+        # must never fall through the falsy branch and surface as a fabricated
+        # "verified-ineligible" (C2).
+        if self.nmtc_eligible is None:
+            return "not-found"
         return "verified-eligible" if self.nmtc_eligible else "verified-ineligible"
 
     def summary(self) -> None:

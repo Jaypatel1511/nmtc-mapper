@@ -163,11 +163,14 @@ class NMTCMapper:
 
         Returns:
             DataFrame with added columns:
-            - nmtc_eligible (bool)
-            - distress_level (str: 'deep', 'severe', 'lic', 'ineligible')
-            - poverty_rate (float)
-            - ami_ratio (float)
-            - unemployment_rate (float)
+            - nmtc_eligible (Optional[bool]: True / False / None — None is
+              INDETERMINATE, never a falsy "ineligible")
+            - eligibility_status (str: 'verified-eligible', 'verified-ineligible',
+              'not-found', 'geocode-failed')
+            - distress_level (str: 'deep', 'severe', 'lic', 'ineligible', 'unknown')
+            - poverty_rate (Optional[float])
+            - ami_ratio (Optional[float])
+            - unemployment_rate (Optional[float])
             - is_non_metro (bool)
             - severe_distress (bool)
             - deep_distress (bool)

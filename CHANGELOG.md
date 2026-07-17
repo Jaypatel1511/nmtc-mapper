@@ -58,6 +58,31 @@ functions that used to return a value now raise, and `nmtc_eligible` becomes
   NMTC Eligible line) instead of the fabricated `❌ NO`.
 - `loader.py` module docstring corrected: the table is the FULL universe
   (35,167 eligible + 50,228 ineligible), not "all eligible census tracts".
+- **Async batch geocoding was 100% broken and is now fixed (C-1).**
+  `_batch_geocode_async` wrapped every coroutine in `create_task` inside an
+  `as_completed` loop that discarded the results, then `gather()`-ed the same
+  coroutine objects — re-awaiting an already-driven coroutine raised
+  `RuntimeError: cannot reuse already awaited coroutine`. Every
+  `enrich(address_col=)` / `geocode_batch(use_async=True)` call on ≥2 addresses
+  raised. Each coroutine is now awaited exactly once via a single `gather`.
+- **A geocoder error aborts the whole batch.** `_batch_geocode_async` calls
+  `gather` **without** `return_exceptions`, so a transport/ambiguity failure in
+  any one address raises its typed `GeocoderError` and aborts the entire batch.
+  This is deliberate, not a regression: it replaces the pre-0.4.0 silent per-row
+  `None`, which downstream became a fabricated **verified-ineligible**. Losing
+  time to a re-run is strictly better than losing truth. This is not a feature —
+  per-row failure capture (continue the batch, mark only the failed rows
+  indeterminate) is planned for **0.4.1**.
+- **No `nest_asyncio`.** `geocode_batch` previously reached for `nest_asyncio`
+  when called inside a running event loop (e.g. Jupyter) — an **undeclared
+  dependency** absent from `Requires-Dist`, working only off an ambient install.
+  It now detects a running loop and falls back to the synchronous path with a
+  `RuntimeWarning` (identical results, only slower); no new dependency.
+- **`EligibilityResult.eligibility_status` no longer fabricates
+  `verified-ineligible` for an indeterminate result (M-4).** With
+  `nmtc_eligible=None` and `tract_found` defaulted `True`, the property fell
+  through its falsy branch and returned `verified-ineligible`; it now guards
+  `is None` first, as `summary()` already did.
 
 ## [0.3.4] — 2026-07-11
 

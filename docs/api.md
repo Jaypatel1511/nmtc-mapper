@@ -21,9 +21,11 @@ Print and return eligibility summary statistics.
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| nmtc_eligible | bool | NMTC eligibility flag |
-| distress_level | str | deep/severe/lic/ineligible |
-| tract_id | str | 11-digit FIPS code |
-| poverty_rate | float | Tract poverty rate |
-| ami_ratio | float | MFI/AMI ratio |
+| nmtc_eligible | Optional[bool] | Tri-state: True / False / None (None = indeterminate, never falsy "ineligible") |
+| eligibility_status | str | verified-eligible / verified-ineligible / not-found / geocode-failed |
+| distress_level | str | deep / severe / lic / ineligible / unknown |
+| tract_id | Optional[str] | 11-digit FIPS code (None if no tract resolved) |
+| poverty_rate | Optional[float] | Tract poverty rate (None if indeterminate) |
+| ami_ratio | Optional[float] | MFI/AMI ratio (None if indeterminate) |
 | geocode_success | bool | Whether geocoding succeeded |
+| tract_found | bool | Whether the tract was present in the eligibility universe |

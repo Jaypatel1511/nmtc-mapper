@@ -2,9 +2,17 @@
 
 **Automated NMTC eligibility checker for addresses and census tracts.**
 
-Pass a DataFrame of addresses and get back a boolean column for NMTC eligibility,
-distress level, poverty rate, AMI ratio, and more — using official CDFI Fund and
-Census Bureau data. No manual lookups required.
+Pass a DataFrame of addresses and get back a **tri-state** `nmtc_eligible` column
+(`True` / `False` / `None`), distress level, poverty rate, AMI ratio, and more —
+using official CDFI Fund and Census Bureau data. No manual lookups required.
+
+`nmtc_eligible` is `Optional[bool]`: `True` (verified eligible), `False`
+(verified ineligible — the CDFI Fund file explicitly says NO), or `None`
+(**indeterminate** — the address could not be geocoded, or the tract is absent
+from the ~85k-tract universe). `None` is **not** a falsy "ineligible": treating
+it as `False` fabricates a verified-ineligible answer. The additive
+`eligibility_status` column names the four outcomes explicitly —
+`verified-eligible` / `verified-ineligible` / `not-found` / `geocode-failed`.
 
 ---
 
@@ -31,9 +39,11 @@ get results in seconds, using the same official data source.
     # Single address (geocodes automatically)
     result = mapper.check_address("1234 S Michigan Ave, Chicago, IL 60605")
     result.summary()
-    print(result.nmtc_eligible)    # True
-    print(result.distress_level)   # "severe"
-    print(result.poverty_rate)     # 0.38
+    print(result.nmtc_eligible)      # True / False / None (None = indeterminate)
+    print(result.eligibility_status) # "verified-eligible" | "verified-ineligible"
+                                     #  | "not-found" | "geocode-failed"
+    print(result.distress_level)     # "deep" / "severe" / "lic" / "ineligible" / "unknown"
+    print(result.poverty_rate)       # 0.38  (None if the tract is indeterminate)
 
     # Known census tract (no geocoding needed)
     result = mapper.check_tract("17031840100")
@@ -102,10 +112,23 @@ A census tract qualifies as a Low-Income Community (LIC) if it meets ANY of:
 
 Distress levels:
 
-- deep     — Poverty >= 40% OR AMI <= 50% OR unemployment >= 2x national rate
-- severe   — Poverty >= 30% OR AMI <= 60% OR unemployment >= 1.5x national rate
-- lic      — NMTC eligible (meets LIC criteria)
+- deep       — the tract carries the CDFI Fund's **deep-distress** designation
+- severe     — the tract carries the CDFI Fund's **severe-distress** designation
+- lic        — NMTC eligible (meets LIC criteria) but not flagged severe/deep
 - ineligible — Does not qualify
+- unknown    — **indeterminate**: geocode no-match, or the tract is absent from
+               the eligibility universe (paired with `nmtc_eligible = None`; never
+               "ineligible")
+
+> **How distress is determined.** For the official CDFI Fund file (the live
+> `.xlsb` download), `severe_distress` and `deep_distress` are read **directly
+> from the Fund's own pre-computed columns** — the package does not recompute
+> them from ACS variables. The CDFI Fund's published criteria for those
+> designations are, for reference, poverty >= 30% / MFI <= 60% AMI /
+> unemployment >= 1.5x national (severe) and poverty >= 40% / MFI <= 50% AMI /
+> unemployment >= 2x national (deep). A threshold-based fallback
+> (`_compute_eligibility`) exists only for the generic CSV path and the built-in
+> synthetic sample; it is **not** used for the official file.
 
 ---
 
@@ -122,11 +145,12 @@ Distress levels:
 
 After running .enrich(), your DataFrame will have:
 
-- nmtc_eligible (bool)
-- distress_level (str: deep / severe / lic / ineligible)
-- poverty_rate (float)
-- ami_ratio (float)
-- unemployment_rate (float)
+- nmtc_eligible (Optional[bool]: True / False / None — None = indeterminate)
+- eligibility_status (str: verified-eligible / verified-ineligible / not-found / geocode-failed)
+- distress_level (str: deep / severe / lic / ineligible / unknown)
+- poverty_rate (Optional[float])
+- ami_ratio (Optional[float])
+- unemployment_rate (Optional[float])
 - is_non_metro (bool)
 - severe_distress (bool)
 - deep_distress (bool)
@@ -137,8 +161,8 @@ After running .enrich(), your DataFrame will have:
 
     PYTHONPATH=. pytest tests/ -v
 
-44 tests across all modules (including fail-loud and explicit-sample-mode
-coverage added in 0.3.4).
+99 tests across all modules (including fail-loud, explicit-sample-mode,
+tri-state eligibility, and async-batch coverage).
 
 ---
 
@@ -153,4 +177,4 @@ coverage added in 0.3.4).
 
 ## License
 
-MIT 2026 Jaypatel1511
+MIT 2026 Jay Patel

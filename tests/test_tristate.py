@@ -55,6 +55,31 @@ def test_absent_and_ineligible_are_distinguishable(sample_table):
     assert ineligible["nmtc_eligible"] is False
 
 
+# ── M-4: eligibility_status must not read None as falsy ───────────────────────
+
+def test_eligibility_status_none_is_never_verified_ineligible():
+    """nmtc_eligible=None with tract_found DEFAULTED (True) and geocode_success
+    True must NOT collapse to 'verified-ineligible' — that is the C2 fabrication
+    the tri-state exists to kill. RED: property returned 'verified-ineligible'."""
+    r = EligibilityResult(
+        address="Census Tract 99999999999",
+        tract_id="99999999999",
+        nmtc_eligible=None,
+        distress_level="unknown",
+        poverty_rate=None,
+        ami_ratio=None,
+        unemployment_rate=None,
+        is_non_metro=False,
+        is_high_migration_rural=False,
+        is_nmtc_native_area=False,
+        severe_distress=False,
+        deep_distress=False,
+        geocode_success=True,
+    )  # tract_found is DEFAULTED to True — the exact trap
+    assert r.tract_found is True
+    assert r.eligibility_status != "verified-ineligible"
+
+
 # ── Fix 2: check_address ──────────────────────────────────────────────────────
 
 def test_check_address_no_match_is_indeterminate(mapper, monkeypatch):

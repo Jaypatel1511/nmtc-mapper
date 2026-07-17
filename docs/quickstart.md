@@ -30,10 +30,11 @@
 
 | Column | Type | Description |
 |--------|------|-------------|
-| nmtc_eligible | bool | True if tract qualifies as LIC |
-| distress_level | str | deep / severe / lic / ineligible |
-| poverty_rate | float | Census tract poverty rate |
-| ami_ratio | float | MFI as pct of area median income |
-| unemployment_rate | float | Census tract unemployment rate |
-| severe_distress | bool | True if severe distress criteria met |
-| deep_distress | bool | True if deep distress criteria met |
+| nmtc_eligible | Optional[bool] | True (eligible) / False (verified ineligible) / None (indeterminate — never read None as "ineligible") |
+| eligibility_status | str | verified-eligible / verified-ineligible / not-found / geocode-failed |
+| distress_level | str | deep / severe / lic / ineligible / unknown (unknown = indeterminate) |
+| poverty_rate | Optional[float] | Census tract poverty rate (None if indeterminate) |
+| ami_ratio | Optional[float] | MFI as pct of area median income (None if indeterminate) |
+| unemployment_rate | Optional[float] | Census tract unemployment rate (None if indeterminate) |
+| severe_distress | bool | CDFI Fund severe-distress designation (read from the official file) |
+| deep_distress | bool | CDFI Fund deep-distress designation (read from the official file) |
