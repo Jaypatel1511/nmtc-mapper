@@ -2,6 +2,62 @@
 
 All notable changes to nmtc-mapper are documented here.
 
+## [0.4.1] — 2026-07-17
+
+Geocoder vintage alignment — the Connecticut correctness fix.
+
+### Fixed
+- **Connecticut addresses no longer fail to resolve.** The geocoder sent
+  `vintage=Current_Current`, which tracks the newest TIGER release, while the
+  CDFI Fund eligibility table is frozen on **2020 census tracts** (its column-0
+  header: "2020 Census Tract Number FIPS code. GEOID"). The two had **drifted
+  apart**. When the Census Bureau replaced Connecticut's eight legacy counties
+  with nine COG/planning regions (effective with the 2022 ACS), addresses in CT
+  began geocoding to COG-based GEOIDs (county FIPS `0911x`–`0919x`) that do not
+  exist in the table — the county FIPS is the middle five digits of every tract
+  GEOID, so the join could not match. The CDFI Fund continues to use the legacy
+  county data for Connecticut (NMTC LIC ACS FAQ, Feb 1 2024, General Q4).
+
+  Effect of the drift: on **0.4.0**, every Connecticut address returned
+  `not-found` (indeterminate). On **0.1.0–0.3.4**, before the tri-state fix, the
+  same drift produced a fabricated **"ineligible"** verdict for real Connecticut
+  tracts. **883 Connecticut tracts (316 eligible)** were affected.
+
+  Example: `765 Asylum Ave, Hartford, CT` geocoded to `09110524600` (Capitol
+  Planning Region), absent from the table. It now geocodes to `09003524600`
+  (same tract, legacy Hartford County), which is in the table and NMTC-eligible.
+
+- **The fix: `vintage=Census2020_Current`.** The address benchmark stays
+  `Public_AR_Current` — current address ranges, so newly built addresses still
+  geocode — resolved onto **2020** tract geography, which is what the table
+  carries. `Census2020_Census2020` was rejected (it would pin the address
+  benchmark to 2020 and fail to geocode anything built since); `Census2010` was
+  rejected (it returns 2010 tracts, which the 2020-tract table does not carry —
+  e.g. Seattle would return the pre-split `53033007100`).
+
+### Changed
+- **Tract basis and geocoder vintage are now bound in one structure**
+  (`schema.TRACT_VINTAGE`, a frozen `TractVintage`). Both the loader (which
+  validates the downloaded table's column-0 header) and the geocoder (which
+  sends `benchmark`+`vintage`) read this single object — not two constants in
+  two modules that a future edit could desync. `TractVintage.__post_init__`
+  refuses to construct a binding whose geocoder vintage, table header, and basis
+  year disagree, so this class of drift cannot silently return. When the CDFI
+  Fund ships the 2021-2025 ACS table on a new tract vintage, this one object
+  moves and both consumers move with it.
+- Sync and async geocoder paths both build their request through the one
+  `_geocoder_params` helper, so neither can drift from the table or each other.
+- `pyproject.toml`: `authors` metadata added; `live` pytest marker registered so
+  network smoke tests are deselected in CI (`-m "not live"`).
+
+### Recon (reported, not acted on)
+- Enumerated every county FIPS in the table's 85,395 GEOIDs against the Census
+  Bureau's current (2024) county universe. **Connecticut is the only drifted
+  state**: the 8 legacy CT counties (`09001`–`09015`) are the only table county
+  FIPS that no longer exist, and the 9 CT planning regions (`09110`–`09190`) are
+  the only current county FIPS absent from the table. No other state is affected
+  this cycle.
+
 ## [0.4.0] — 2026-07-16
 
 Fail-loud + tri-state eligibility. **This release contains breaking changes** —

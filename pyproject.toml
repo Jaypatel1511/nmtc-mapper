@@ -4,11 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nmtc-mapper"
-version = "0.4.0"
+version = "0.4.1"
 description = "Automated NMTC eligibility checker — geocode addresses and check Low-Income Community status using CDFI Fund and Census data"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
+authors = [{name = "Jay Patel", email = "thejaypatel1511@gmail.com"}]
 dependencies = [
     "aiohttp>=3.8.0",
     "tqdm>=4.64.0",
@@ -31,3 +32,12 @@ Homepage = "https://github.com/Jaypatel1511/nmtc-mapper"
 # real package. (find_packages() in the old setup.py did this implicitly.)
 [tool.setuptools.packages.find]
 include = ["nmtcmapper*"]
+
+# Register the `live` marker so `@pytest.mark.live` is not an unknown-marker
+# warning, and so tests that hit the real Census/CDFI network can be deselected
+# in CI with `-m "not live"` (see .github/workflows). Deselection is NOT a skip
+# marker — the offline suite runs unconditionally; live tests are opt-in only.
+[tool.pytest.ini_options]
+markers = [
+    "live: exercises the real Census geocoder / CDFI Fund endpoints (network); deselected in CI, run locally with `-m live`",
+]

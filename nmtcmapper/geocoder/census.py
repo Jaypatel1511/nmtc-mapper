@@ -16,6 +16,7 @@ from tqdm import tqdm
 from nmtcmapper.data.schema import (
     CENSUS_GEOCODER_URL,
     CENSUS_GEOCODER_BATCH_URL,
+    TRACT_VINTAGE,
 )
 from nmtcmapper.exceptions import (
     GeocoderTransportError, AmbiguousAddressError,
@@ -29,13 +30,18 @@ RETRY_BACKOFF           = 2.0   # seconds
 
 
 def _geocoder_params(address: str) -> dict:
+    # benchmark + vintage come from the ONE tract-vintage binding (schema.py),
+    # NOT literals here — this is the single point that keeps the geocoder's tract
+    # geography aligned with the eligibility table's frozen 2020 basis. Both the
+    # sync and async paths build their params through THIS helper, so neither can
+    # drift from the table (or from each other). See schema.TRACT_VINTAGE.
     return {
         "street":    _parse_street(address),
         "city":      _parse_city(address),
         "state":     _parse_state(address),
         "zip":       _parse_zip(address),
-        "benchmark": "Public_AR_Current",
-        "vintage":   "Current_Current",
+        "benchmark": TRACT_VINTAGE.geocoder_benchmark,
+        "vintage":   TRACT_VINTAGE.geocoder_vintage,
         "layers":    "Census Tracts",
         "format":    "json",
     }

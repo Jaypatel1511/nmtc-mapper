@@ -111,6 +111,7 @@ jobs:
           /tmp/wheel_test_venv/bin/pytest tests/ \
             -v --tb=short \
             --no-header \
+            -m "not live" \
             --import-mode=importlib
 
   # ── Step 4: Publish to PyPI — only after guard + build + all tests pass ───

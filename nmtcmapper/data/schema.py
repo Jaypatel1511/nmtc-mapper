@@ -3,6 +3,63 @@ Column mappings, eligibility thresholds, and constants for NMTC eligibility.
 Based on 2016-2020 ACS data — mandatory for QLICIs closed on or after Sept 1, 2024.
 Source: https://www.cdfifund.gov/research-data
 """
+from dataclasses import dataclass
+
+# ── Tract-vintage binding: THE single source of truth ─────────────────────────
+# The recurring failure class is "geocoder vintage drifts from data vintage".
+# The CDFI Fund eligibility table is FROZEN on one census-tract vintage (its
+# column-0 header names it), while the Census geocoder's Current_Current vintage
+# tracks the newest TIGER release — so the two separate BY DESIGN. Connecticut
+# was the first to bite: the Bureau replaced CT's 8 legacy counties with 9
+# COG/planning regions effective with the 2022 ACS; the county FIPS is the middle
+# 5 digits of every tract GEOID, so the join stopped matching (883 CT tracts,
+# 316 eligible, went not-found), while the CDFI Fund keeps using the legacy
+# county data for CT (NMTC LIC ACS FAQ, Feb 1 2024, General Q4).
+#
+# Both the loader (which validates the table's column-0 GEOID header) and the
+# geocoder (which sends benchmark+vintage) read THIS ONE object, so the tract
+# basis and the geocoder vintage cannot be edited apart in two modules. When the
+# CDFI Fund ships the 2021-2025 ACS table on a new tract vintage, edit this ONE
+# object — basis_year, geocoder_vintage, and table_geoid_header move together or
+# __post_init__ refuses to construct.
+@dataclass(frozen=True)
+class TractVintage:
+    basis_year: int          # census-tract geography the table is built on
+    geocoder_benchmark: str  # address ranges — CURRENT so new construction geocodes
+    geocoder_vintage: str    # tract geography the geocoder resolves onto (must be basis_year)
+    table_geoid_header: str  # the table's column-0 header, proving its tract basis
+
+    def __post_init__(self):
+        token = f"Census{self.basis_year}"
+        # The geocoder must resolve addresses onto the SAME census-tract geography
+        # the table carries. Census2020_Current => 2020 tract geography with
+        # current address ranges. A vintage that does not start with this token
+        # is exactly the drift this class exists to make impossible.
+        if not self.geocoder_vintage.startswith(token + "_"):
+            raise ValueError(
+                f"geocoder_vintage {self.geocoder_vintage!r} does not resolve onto "
+                f"{self.basis_year} census-tract geography (expected a {token}_* "
+                f"vintage). The geocoder vintage has drifted from the table's tract "
+                f"basis — the Connecticut-class bug."
+            )
+        # The table's declared geography (its column-0 header) must name the same
+        # basis year, so a table download on a different vintage cannot be paired
+        # with this geocoder vintage without tripping the loader's header check.
+        if str(self.basis_year) not in self.table_geoid_header:
+            raise ValueError(
+                f"table_geoid_header {self.table_geoid_header!r} does not name the "
+                f"{self.basis_year} tract basis. The table's declared geography has "
+                f"drifted from basis_year."
+            )
+
+
+# The one binding in force for the 2016-2020 ACS eligibility table.
+TRACT_VINTAGE = TractVintage(
+    basis_year=2020,
+    geocoder_benchmark="Public_AR_Current",
+    geocoder_vintage="Census2020_Current",
+    table_geoid_header="2020 Census Tract Number FIPS code. GEOID",
+)
 
 # ── Eligibility Thresholds ────────────────────────────────────────────────────
 
@@ -74,7 +131,10 @@ ELIGIBILITY_XLSB_COLUMN_COUNT = 16
 # reads (0,1,2,3,5,7,13,14,15). Matched after normalization (collapse internal
 # whitespace, casefold).
 ELIGIBILITY_XLSB_EXPECTED_HEADERS = {
-    0:  "2020 Census Tract Number FIPS code. GEOID",
+    # Column 0 is the table's tract-basis declaration — read it from the ONE
+    # binding, NOT a second literal, so the loader's header check and the
+    # geocoder vintage cannot desync (0.4.1).
+    0:  TRACT_VINTAGE.table_geoid_header,
     1:  "OMB Metro/Non-metro Designation, March 2020 (OMB Bulletin No. 20-01)",
     2:  "Does Census Tract Qualify For NMTC Low-Income Community (LIC) on Poverty or Income Criteria?",
     3:  "Census Tract Poverty Rate % (2016-2020 ACS)",
