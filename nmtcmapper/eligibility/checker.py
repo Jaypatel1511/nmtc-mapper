@@ -31,6 +31,10 @@ class EligibilityResult:
     severe_distress: bool
     deep_distress: bool
     geocode_success: bool
+    # A `False` here may be a VINTAGE MISS, not "not an OZ": the OZ list is
+    # 2010-tract-based while the geocoder returns 2020 tracts, so ~16% of OZ
+    # designations have no matching GEOID. A `True` is trustworthy; a `False` is
+    # not distinguishable from "not an OZ". See README "Known Issues" / CHANGELOG.
     is_opportunity_zone: bool = False
     tract_found: bool = True
 
@@ -81,6 +85,8 @@ class EligibilityResult:
         if self.unemployment_rate is not None:
             print(f"  Unemployment:     {self.unemployment_rate*100:.1f}%")
         print(f"  Non-Metro:        {'Yes' if self.is_non_metro else 'No'}")
+        # "No" here may be a vintage miss (2010-based OZ list vs 2020 tract) — see
+        # is_opportunity_zone and README "Known Issues".
         print(f"  Opportunity Zone: {'Yes' if self.is_opportunity_zone else 'No'}")
         print(f"  High Migration:   {'Yes' if self.is_high_migration_rural else 'No'}")
         print()

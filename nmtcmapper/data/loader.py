@@ -364,6 +364,12 @@ def load_opportunity_zones(force: bool = False) -> set:
     Sheet "QOZs 14Jun", header on row 5 (index 4),
     tract FIPS in column "Census Tract Number".
     Raises OZDownloadError / OZParseError on any failure — never falls back.
+
+    VINTAGE CAVEAT: these are 2010-based census tracts (OZs were designated in
+    2018 on 2010 geography). The geocoder returns 2020 tracts, so ~16% of these
+    GEOIDs (1,408 / 8,764) have no 2020 equivalent and will not match — a
+    resulting ``is_opportunity_zone=False`` may be a vintage miss, not a real
+    "not an OZ". See README "Known Issues".
     """
     from nmtcmapper.data.schema import OZ_URL_2018
 

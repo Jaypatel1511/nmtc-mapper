@@ -157,6 +157,22 @@ After running .enrich(), your DataFrame will have:
 
 ---
 
+## Known Issues
+
+**`is_opportunity_zone` is unreliable — a `False` may be a vintage miss.** The
+Opportunity Zone list is the CDFI Fund's Dec 2018 designated-QOZ file, and OZs
+were designated on **2010 census tracts** (legally fixed to them). The geocoder
+returns **2020** tracts, and **1,408 of the 8,764 OZ designations (~16%)** have
+no matching 2020 GEOID (they split/merged/renumbered after 2010). So an address
+in one of those designations reports `Opportunity Zone: No` even though it is in
+a designated OZ. A **`Yes` is trustworthy**; a **`No` is not** — it may mean
+"not an OZ" *or* "OZ with no 2020 GEOID", and the package cannot yet tell them
+apart. This is **pre-existing** (not introduced or worsened by 0.4.1's geocoder
+change). A tri-state fix (`Optional[bool]`) is slated for 0.5.0 — see the
+CHANGELOG.
+
+---
+
 ## Running Tests
 
     PYTHONPATH=. pytest tests/ -v

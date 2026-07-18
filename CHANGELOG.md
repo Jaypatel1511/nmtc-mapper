@@ -58,6 +58,34 @@ Geocoder vintage alignment — the Connecticut correctness fix.
   the only current county FIPS absent from the table. No other state is affected
   this cycle.
 
+### Known Issues
+- **`is_opportunity_zone` is unreliable — a `False` may be a vintage miss, not a
+  real "not an OZ".** This is a *second* vintage-mismatched join, in a different
+  field, of the same class as the Connecticut bug — and it is **pre-existing**:
+  0.4.1 neither causes nor worsens it (both `Current_Current` and the new
+  `Census2020_Current` return non-2010 tracts, so neither ever aligned with the
+  2010-based OZ list).
+
+  The Opportunity Zone list is loaded from the CDFI Fund's Dec 2018 designated-
+  QOZ file (`designated-qozs.12.14.18.xlsx`). Opportunity Zones were designated
+  in 2018 on **2010 census tracts**, and the designation is legally fixed to
+  those tracts. Verified against the Census 2010↔2020 tract crosswalk: **all
+  8,764 OZ GEOIDs are 2010 tracts**. The geocoder now returns **2020** tracts,
+  and **1,408 of the 8,764 OZ designations (~16%)** have no matching GEOID in the
+  2020 tract universe (they split, merged, or were renumbered between 2010 and
+  2020). `is_opportunity_zone` compares a 2020 GEOID against the 2010-based list,
+  so an address in one of those 1,408 designations reports **"Opportunity Zone:
+  No"** — a fabricated negative.
+
+  Interpretation: a **`Yes` is trustworthy** (the GEOID matched a designated OZ);
+  a **`No` is not** — it may mean "not an OZ" *or* "OZ designation with no 2020
+  GEOID," and the package cannot currently distinguish the two.
+
+  Not fixed here. The honest fix makes `is_opportunity_zone` tri-state
+  (`Optional[bool]`: `True` on match, `None` on a vintage miss — a real "no" is
+  not knowable from this join), a breaking contract change slated for **0.5.0**,
+  together with a design decision about geocoding at two vintages.
+
 ## [0.4.0] — 2026-07-16
 
 Fail-loud + tri-state eligibility. **This release contains breaking changes** —
