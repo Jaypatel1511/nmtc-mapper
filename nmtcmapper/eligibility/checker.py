@@ -27,6 +27,10 @@ class EligibilityResult:
     unemployment_rate: Optional[float]
     is_non_metro: bool
     is_high_migration_rural: bool
+    # ALWAYS `False`: no column in the live CDFI Fund .xlsb populates this, so a
+    # `False` means "not determined," NOT "confirmed not a native area". Native
+    # areas are a real NMTC Areas-of-Higher-Distress criterion the CDFI Fund
+    # publishes separately from the LIC file. See README "Known Issues" / CHANGELOG.
     is_nmtc_native_area: bool
     severe_distress: bool
     deep_distress: bool

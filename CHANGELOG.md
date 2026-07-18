@@ -86,6 +86,28 @@ Geocoder vintage alignment — the Connecticut correctness fix.
   not knowable from this join), a breaking contract change slated for **0.5.0**,
   together with a design decision about geocoding at two vintages.
 
+- **`is_nmtc_native_area` is always `False` — a `False` means "not determined,"
+  not "not a native area."** Verified: the field is `False` for **all 85,395
+  tracts** (zero `True`). **No data source in this package populates it.** The
+  live CDFI Fund file is the `.xlsb` LIC eligibility table, whose 16 columns
+  contain no native-area field; the `.xlsb` loader hardcodes `False`, and the
+  only mapping that could set it (`"NATIVE_AREA"`) lives on the `.xlsx` branch
+  the live URL never takes. The field is structurally incapable of being `True`.
+
+  This is a real NMTC criterion the package cannot see, not a fabricated one.
+  Native areas — Federal Indian Reservations, Off-Reservation Trust Lands,
+  Hawaiian Home Lands, and Alaska Native Village Statistical Areas — are a
+  documented NMTC **Areas of Higher Distress** criterion in the CDFI Fund's NMTC
+  allocation application / Native Initiative materials, a **separate** CDFI Fund
+  publication this package does not load (the LIC ACS FAQ, Feb 1 2024, Q6 points
+  such criteria to the Compliance & Monitoring materials, not the LIC file). So a
+  `False` here should be read as "this package did not determine native-area
+  status," never as "confirmed not a native area."
+
+  Pre-existing since **0.1.0**; 0.4.1 neither causes nor changes it. Resolution
+  deferred to **0.5.0** — populate from the real source (needs recon), drop the
+  field (breaking), or make it `Optional[bool]` with `None` (breaking).
+
 ## [0.4.0] — 2026-07-16
 
 Fail-loud + tri-state eligibility. **This release contains breaking changes** —

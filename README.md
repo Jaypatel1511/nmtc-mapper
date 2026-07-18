@@ -171,6 +171,15 @@ apart. This is **pre-existing** (not introduced or worsened by 0.4.1's geocoder
 change). A tri-state fix (`Optional[bool]`) is slated for 0.5.0 — see the
 CHANGELOG.
 
+**`is_nmtc_native_area` is always `False` — it means "not determined," not "not
+a native area."** No column in the live CDFI Fund `.xlsb` file feeds this field,
+so it is `False` for all 85,395 tracts. Native areas (Federal Indian
+Reservations, Off-Reservation Trust Lands, Hawaiian Home Lands, Alaska Native
+Village Statistical Areas) are a real NMTC *Areas of Higher Distress* criterion,
+but the CDFI Fund publishes it separately from the LIC eligibility file this
+package loads. **Pre-existing since 0.1.0**; 0.4.1 does not change it. Resolution
+deferred to 0.5.0 — see the CHANGELOG.
+
 ---
 
 ## Running Tests
