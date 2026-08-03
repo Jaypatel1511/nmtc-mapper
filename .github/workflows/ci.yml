@@ -68,8 +68,12 @@ jobs:
         cp -R tests "${DOCSDIR}/tests"
         cp -R tools "${DOCSDIR}/tools"
         cp -R docs/README.expected "${DOCSDIR}/docs/README.expected"
-        cp README.md pyproject.toml setup.py docs-check.toml \
+        cp README.md pyproject.toml docs-check.toml \
            docs-check-denylist.txt "${DOCSDIR}/"
+        # setup.py is optional: 6 of the 22 repos in this portfolio are
+        # pyproject-only, so copying it unconditionally would make this job a
+        # hard error on adoption rather than a file copy.
+        [ -f setup.py ] && cp setup.py "${DOCSDIR}/"
         cd "${DOCSDIR}"
 
         "${VPY}" tools/docs_check.py --root .
