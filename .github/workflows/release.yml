@@ -227,9 +227,21 @@ jobs:
         run: |
           set -euo pipefail
           SDIST="$(ls dist/*.tar.gz)"
-          ls tests/test_*.py | xargs -n1 basename | sort > "${RUNNER_TEMP}/repo-tests.txt"
-          tar tzf "${SDIST}" \
-            | sed -n 's|.*/tests/\(test_[^/]*\.py\)$|\1|p' | sort \
+          # Enumerate with find, NOT `ls tests/test_*.py`: this must see nested
+          # test modules. The flat form compared 14 against 14 and passed on
+          # nmtc-application-builder while its sdist shipped 14 of 50 modules --
+          # the other 36 live below tests/, so neither side ever saw them.
+          # Compare on paths relative to the sdist/checkout root. Tarball entries
+          # are "<name>-<version>/tests/..."; stripping the first path component
+          # makes the two lists directly comparable.
+          find tests -name 'test_*.py' | sed 's|^|/|' | sort > "${RUNNER_TEMP}/repo-tests.txt"
+          # `|| true` because grep exits 1 on no match, and under `pipefail` that
+          # would kill the step before the emptiness check below could report
+          # WHY -- failing silently instead of saying "MANIFEST.in matches
+          # nothing". Verified: without it, a tarball shipping zero test modules
+          # exits 1 with no output at all.
+          tar tzf "${SDIST}" | sed 's|^[^/]*||' \
+            | { grep -E '^/tests/(.*/)?test_[^/]*\.py$' || true; } | sort \
             > "${RUNNER_TEMP}/sdist-tests.txt"
 
           echo "test modules in checkout : $(wc -l < "${RUNNER_TEMP}/repo-tests.txt")"
