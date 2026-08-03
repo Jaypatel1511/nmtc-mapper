@@ -41,3 +41,10 @@ include = ["nmtcmapper*"]
 markers = [
     "live: exercises the real Census geocoder / CDFI Fund endpoints (network); deselected in CI, run locally with `-m live`",
 ]
+# A parametrized test whose argument list comes out EMPTY is silently marked
+# skipped by default, and a skip exits 0. That is the same vacuity class the
+# release gates exist to close: the test reports success while asserting
+# nothing. fail_at_collect turns "Empty parameter set in 'test_x'" into a
+# collection ERROR, so a generator that stops finding inputs fails loudly
+# instead of quietly certifying nothing.
+empty_parameter_set_mark = "fail_at_collect"

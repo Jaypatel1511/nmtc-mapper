@@ -198,6 +198,30 @@ jobs:
       # with "check MANIFEST.in" -- blaming packaging for a deliberate source
       # change. The invariant that actually matters is "the tarball contains
       # every test module the repository has", and that needs no threshold.
+      #
+      # WHAT THIS STEP DOES NOT CERTIFY -- read this before "simplifying" the
+      # pipeline down to this one count, and before copying this job into the
+      # next repo. It compares test_*.py names ONLY, and setuptools' legacy
+      # sdist default ALREADY matches tests/test*.py. So on a completely broken
+      # MANIFEST.in this assertion still PASSES. Measured on the pre-fix
+      # tarball for this repo: 14 test modules in the checkout, 14 in the
+      # sdist, green -- while tests/conftest.py and tests/__init__.py were both
+      # absent, which is the 81 passed / 33 errors defect in the header above.
+      # conftest.py is not a test_*.py, so nothing here can ever see it go
+      # missing.
+      #
+      # This step fires only where the suite is NESTED, because the default
+      # pattern matches nothing below tests/. Verified on pre-fix tarballs
+      # across the four repos this job was copied to, plus this one:
+      # cdfi-benchmark 5/5 PASS, hmda-analyzer 8/8 PASS, cdfi-data 4/4 PASS,
+      # nmtc-mapper 14/14 PASS -- only nmtc-application-builder failed, at 14
+      # of 50, and only because 36 of its modules sit below tests/.
+      #
+      # The check actually doing the work is the required-files loop in
+      # test-sdist, which asserts tests/conftest.py, tests/__init__.py,
+      # README.md and pyproject.toml are present in the tarball. Delete that
+      # loop and keep this count, and the release gate certifies nothing about
+      # the file whose absence broke 0.4.1.
       - name: Assert the sdist ships every test module in the checkout
         shell: bash
         run: |
@@ -397,7 +421,10 @@ jobs:
           # --strict-markers so an unregistered marker can never again pass as a
           # warning: if the ini file stops reaching this directory, the job fails
           # loudly instead of silently deselecting nothing.
-          "${VPY}" -m pytest tests -m "not live" --import-mode=importlib --strict-markers
+          # --junitxml so the NEXT step can count what actually executed. The
+          # module-count check alone cannot: see the note there.
+          "${VPY}" -m pytest tests -m "not live" --import-mode=importlib --strict-markers \
+            --junitxml="${RUNNER_TEMP}/sdist-junit.xml"
 
       - name: Assert the sdist suite is not silently truncated
         shell: bash
@@ -417,6 +444,52 @@ jobs:
           # change that packaging had nothing to do with.
           if [ "${SHIPPED}" -eq 0 ]; then
             echo "::error::sdist ships no test modules at all — MANIFEST.in matches nothing"
+            exit 1
+          fi
+
+          # The check above counts MODULES SHIPPED. It never counts EXECUTIONS,
+          # and those are different numbers: a suite where every test skips or
+          # is deselected exits 0 while shipping every module it should.
+          #   2 skipped in 0.00s     -> pytest exit code 0
+          #   1 deselected in 0.00s  -> pytest exit code 0
+          # This job passes `-m "not live"`, so it is directly exposed: widen
+          # that expression, or re-mark the suite `live`, and every test is
+          # deselected while the module count stays untouched and every gate
+          # stays green. That is the same vacuity class as an empty parametrize,
+          # at job scale -- see empty_parameter_set_mark in pyproject.toml for
+          # the small-scale version.
+          #
+          # FLOOR DERIVATION -- not a number picked to be safe, and the reason
+          # this is not another `-lt 14`. The rule is HALF of what the suite
+          # genuinely runs today, rounded down to a round number. Measured on
+          # this tarball: 111 tests executed under this job's exact invocation
+          # (3 more are `live` and deselected, and are correctly NOT counted
+          # toward the floor). Half is 55, so the floor is 55.
+          #
+          # Half, deliberately: the rejected `-lt 14` threshold sat at the
+          # exact count shipping that day, so deleting one test module failed
+          # the job with a packaging error for a deliberate source change.
+          # This one has 56 tests of headroom -- you would have to delete more
+          # than half the suite before it complains, while total deselection
+          # lands at 0 and trips it immediately.
+          FLOOR=55
+          EXECUTED="$(python - "${RUNNER_TEMP}/sdist-junit.xml" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          root = ET.parse(sys.argv[1]).getroot()
+          suites = root.findall("testsuite") if root.tag == "testsuites" else [root]
+          total = sum(int(s.get("tests", 0)) for s in suites)
+          skipped = sum(int(s.get("skipped", 0)) for s in suites)
+          # Deselected tests never appear in the report at all, so they are
+          # absent from `total` -- which is exactly what makes this catch them.
+          print(total - skipped)
+          PY
+          )"
+          echo "tests actually executed: ${EXECUTED}  (floor ${FLOOR})"
+          if [ "${EXECUTED}" -lt "${FLOOR}" ]; then
+            echo "::error::the sdist suite executed only ${EXECUTED} tests, below the floor of ${FLOOR}."
+            echo "::error::Shipping every test module is not the same as running them. Check for a"
+            echo "::error::marker change or an -m expression that deselected the suite. If the suite"
+            echo "::error::genuinely shrank by more than half, re-derive FLOOR from the new count."
             exit 1
           fi
 
