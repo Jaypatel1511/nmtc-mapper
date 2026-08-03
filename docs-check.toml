@@ -1,0 +1,69 @@
+# docs-check configuration.
+#
+# Adopting this gate in another repo is a copy of tools/docs_check.py plus an
+# edit of this file. The only fields that are repo-specific are
+# [package].import_name and, if the layout differs, the paths below.
+
+[package]
+# The IMPORT name, not the PyPI name. nmtc-mapper on PyPI -> nmtcmapper here.
+import_name = "nmtcmapper"
+readme = "README.md"
+
+[expected]
+# Committed stdout for every block marked '# docs-check: run', so a change in
+# documented output shows up as a reviewable diff in the PR rather than as a
+# number nobody re-derived.
+dir = "docs/README.expected"
+
+[tests]
+path = "tests"
+# Matches a line like "114 tests across all modules ...". If the README makes no
+# such claim the assertion is skipped -- but if it makes one, it must be true.
+claim_pattern = '^(\d+)\s+tests\b'
+
+[denylist]
+file = "docs-check-denylist.txt"
+# pyproject.toml is scanned only across [project].description and .keywords --
+# the fields that become the PyPI project page. setup.py is scanned whole.
+targets = ["README.md", "pyproject.toml", "setup.py"]
+
+# ---------------------------------------------------------------------------
+# Known failures -- tracked documentation debt.
+#
+# Every entry is a CLAIM THAT SOMETHING IS BROKEN. Entries are printed loudly on
+# every run, never hidden. An entry that starts passing FAILS the gate, so this
+# list cannot quietly accumulate dead weight. An empty list is the goal state.
+#
+# `id` values come from the [bracketed] identifier docs_check.py prints for each
+# finding. Format:
+#
+#   [[known_failures]]
+#   id = "readme-test-count"
+#   reason = "why it is broken and why it is not being fixed now"
+#   owner_release = "0.5.0"
+#
+# ---------------------------------------------------------------------------
+#
+# THE LEDGER IS EMPTY, AND THAT IS A MEASURED RESULT, NOT AN OVERSIGHT.
+#
+# The brief for this gate predicted nmtc-mapper "will not pass on day one" and
+# asked for the ledger to be populated with exactly what genuinely fails. After
+# making the three in-scope fixes -- the test count (99 -> 114), the block
+# markers, and denylist compliance -- the gate passes all five assertions
+# against the installed 0.4.1 wheel. Nothing else genuinely fails, so nothing
+# else is listed. Every entry here is a claim that something is broken; adding
+# one that is not would make this file lie in the same way the READMEs did.
+#
+# Checked and found NOT failing (so deliberately absent):
+#   * denylist -- CET1, disparate-impact and "the methodology federal examiners
+#     use" are all absent from this repo's README.md, setup.py and pyproject
+#     description/keywords. Verified by grep. They are live in cdfi-benchmark
+#     and fair-lending-screener, not here.
+#   * symbols -- the README's code blocks import exactly three top-level names
+#     (NMTCMapper, NMTCMapperError, load_sample_table). All three resolve.
+#
+# What is NOT covered by this gate, and therefore is not ledger debt either:
+# the README's known-issues prose (is_opportunity_zone vintage miss,
+# is_nmtc_native_area always False) is documentation of real defects, not a
+# false claim, and assertion 2 does not resolve instance attributes such as
+# mapper.enrich or result.summary(). Those ride 0.5.0 on their own merits.

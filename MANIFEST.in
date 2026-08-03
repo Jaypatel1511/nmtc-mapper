@@ -1,0 +1,39 @@
+# Why this file exists — verified, not inherited.
+#
+# setuptools' legacy sdist default matches only `tests/test*.py`. It therefore
+# omitted `tests/conftest.py` and `tests/__init__.py`. conftest.py defines all
+# three fixtures the suite uses (sample_table, mapper, sample_df), so the suite
+# that shipped inside the sdist could not run: installing the 0.4.1 sdist and
+# running its own tests/ gave **81 passed, 33 errors**, every error being
+# "fixture 'sample_table' not found" at setup.
+#
+# This reproduces ONLY from a clean checkout. A local `python -m build` in a
+# working tree that already has `nmtc_mapper.egg-info/` picks up the stale
+# SOURCES.txt, which lists conftest.py, and produces a CORRECT sdist. Since
+# `*.egg-info/` is gitignored, CI never has that seed — so the artifact CI ships
+# is broken while the one a maintainer builds by hand looks fine. That gap is
+# why the fix has to be paired with the test-sdist job in release.yml: the
+# MANIFEST.in is only what makes that job pass, and the job is what stops this
+# from silently regressing again.
+#
+# Fourth instance of this defect in the portfolio: sbic-tracker, oz-tracker and
+# cdfi-fund-tracker all hit it first. The fix was written three times and
+# propagated nowhere. Packaging that is never installed from is packaging that
+# is never verified.
+recursive-include tests *.py
+
+include README.md
+include CHANGELOG.md
+include LICENSE
+include pyproject.toml
+include setup.py
+
+# The docs-check gate ships inside the sdist too, so the tarball carries
+# everything needed to re-run the gate that certified it.
+include docs-check.toml
+include docs-check-denylist.txt
+recursive-include tools *.py
+recursive-include docs/README.expected *.txt
+
+global-exclude *.pyc
+global-exclude __pycache__/*

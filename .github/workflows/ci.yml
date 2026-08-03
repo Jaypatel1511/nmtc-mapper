@@ -31,3 +31,45 @@ jobs:
       # `-m "not live"` deselects network tests (the offline suite is exhaustive
       # and hermetic). This is deselection, not a skip marker.
       run: pytest tests/ -v -m "not live"
+
+  # The README gate, run on every PR rather than only at tag time -- a release
+  # is the wrong place to first learn the docs drifted. It builds a wheel and
+  # checks against THAT, from a directory with no ./nmtcmapper on it, because a
+  # docs gate that reads the source tree repeats the defect it exists to catch.
+  docs-check:
+    name: docs-check (README vs built wheel)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+    - name: Set up Python 3.12
+      # 3.12 for tomllib, which docs_check.py uses to read docs-check.toml.
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+      with:
+        python-version: '3.12'
+
+    - name: Build the wheel
+      run: |
+        set -euo pipefail
+        python -m pip install --upgrade pip build
+        python -m build --wheel
+
+    - name: Run docs-check against the built wheel
+      shell: bash
+      run: |
+        set -euo pipefail
+        python -m venv /tmp/docs-venv
+        VPY=/tmp/docs-venv/bin/python
+        "${VPY}" -m pip install --upgrade pip
+        "${VPY}" -m pip install "$(ls dist/*.whl)" pytest
+
+        DOCSDIR=/tmp/docs-check
+        mkdir -p "${DOCSDIR}/docs"
+        cp -R tests "${DOCSDIR}/tests"
+        cp -R tools "${DOCSDIR}/tools"
+        cp -R docs/README.expected "${DOCSDIR}/docs/README.expected"
+        cp README.md pyproject.toml setup.py docs-check.toml \
+           docs-check-denylist.txt "${DOCSDIR}/"
+        cd "${DOCSDIR}"
+
+        "${VPY}" tools/docs_check.py --root .

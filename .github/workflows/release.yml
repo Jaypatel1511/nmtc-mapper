@@ -1,136 +1,414 @@
 name: Release
 
-# Triggers on any tag that looks like a version (v0.3.3, v1.0.0, etc.)
-# The verify-version job fails the entire workflow if the tag does not match
-# the version declared in pyproject.toml, so a mis-tagged push never reaches PyPI.
+# Release / publish pipeline. Triggered ONLY by pushing a version tag (v*).
+#
+#   verify-version ─> build ─┬─> test-wheel ─┬─> twine-check ─> publish
+#                            ├─> test-sdist ─┤
+#                            └─> docs-check ─┘
+#
+# The three middle jobs answer three different questions and none can answer
+# another's:
+#   test-wheel  "does the installed wheel work on every supported Python?"
+#   test-sdist  "is the source distribution complete?" -- which test-wheel
+#               structurally CANNOT answer, because it sources tests/ from the
+#               git checkout, so a tarball shipping no tests at all would still
+#               go green.
+#   docs-check  "does the README describe the artifact we are about to ship?"
+#
+# Working principle: a gate must consume the artifact it certifies. A gate that
+# cannot fail is worse than no gate, because it converts an unknown into a
+# false assurance. Two live examples in this repo motivated the rewrite below:
+#
+#   1. The previous test-wheel job ran
+#        python -c "import nmtcmapper; print(nmtcmapper.__version__)"
+#      from the checkout root. `python -c` puts the cwd on sys.path, so that
+#      import resolved to ./nmtcmapper/__init__.py -- the SOURCE TREE, not the
+#      wheel. Worse, __version__ here is read from installed distribution
+#      metadata via importlib.metadata, so the check reported the correct
+#      version anyway and passed. It was structurally incapable of failing on
+#      the thing it claimed to verify. Verified locally: from the repo root the
+#      import resolves to ./nmtcmapper/__init__.py; from a clean dir it resolves
+#      into site-packages.
+#
+#   2. There was no sdist job at all, and no MANIFEST.in. setuptools' legacy
+#      sdist default matches only tests/test*.py, so the 0.4.1 tarball shipped
+#      without tests/conftest.py or tests/__init__.py. conftest.py defines all
+#      three fixtures the suite uses, so installing that sdist and running its
+#      own tests/ gave 81 passed / 33 errors. Every gate was green.
+#
+# Publishing is OIDC Trusted Publisher only (no API token). The Trusted
+# Publisher is registered against workflow file `release.yml` and environment
+# `pypi` -- the filename of THIS file and the `environment:` key on the publish
+# job are both load-bearing for the OIDC claim match.
+
 on:
   push:
     tags:
       - 'v*'
 
+# Least privilege by default; only `publish` overrides this.
+permissions:
+  contents: read
+
 jobs:
-  # ── Step 1: Verify the git tag matches pyproject.toml ─────────────────────
+  # ── 1. Version drift guard ────────────────────────────────────────────────
+  # NOTE for anyone porting cdfi-fund-tracker's tri-source guard here: it does
+  # not apply to this repo, and forcing it would mean inventing a version source
+  # that does not exist. nmtc-mapper has exactly ONE authoritative version:
+  #   pyproject.toml [project].version        <- the only literal
+  #   setup.py                                 <- bare shim, `setup()`, no version
+  #   nmtcmapper/__init__.py                   <- __version__ is read at runtime
+  #                                               from importlib.metadata, i.e.
+  #                                               DERIVED from installed dist
+  #                                               metadata, not declared
+  # So instead of comparing three sources, this job compares the tag to the one
+  # real source AND asserts the other two have not grown a competing literal --
+  # which is the actual drift risk for this layout.
   verify-version:
-    name: Guard — tag must match pyproject.toml
+    name: Verify tag matches pyproject.toml (single-source guard)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
-      - name: Check tag equals pyproject.toml version
+      - name: Compare tag to pyproject.toml; assert no competing version source
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"          # e.g. v0.3.3
-          TAG_VERSION="${TAG#v}"                   # e.g. 0.3.3
-          PYPROJECT_VERSION=$(python -c \
-            "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          echo "Git tag       : $TAG"
-          echo "Tag version   : $TAG_VERSION"
-          echo "pyproject     : $PYPROJECT_VERSION"
-          if [ "$TAG_VERSION" != "$PYPROJECT_VERSION" ]; then
-            echo ""
-            echo "ERROR: git tag '$TAG' does not match pyproject.toml version '$PYPROJECT_VERSION'."
-            echo "Fix: bump pyproject.toml to $TAG_VERSION, commit,"
-            echo "     delete the tag, re-tag, and push again."
-            exit 1
-          fi
-          echo "Version guard passed: $TAG_VERSION == $PYPROJECT_VERSION"
+          set -euo pipefail
+          python - <<'PY'
+          import ast, os, pathlib, sys, tomllib
 
-  # ── Step 2: Build the wheel from the tagged commit ────────────────────────
+          tag = os.environ["TAG"]
+          expected = tag[1:] if tag.startswith("v") else tag
+
+          with open("pyproject.toml", "rb") as fh:
+              declared = tomllib.load(fh)["project"]["version"]
+
+          print(f"{'git tag':<28}: {tag}")
+          print(f"{'expected version':<28}: {expected}")
+          print(f"{'pyproject.toml':<28}: {declared}")
+
+          failed = False
+          if declared != expected:
+              print(f"::error::pyproject.toml declares '{declared}', expected '{expected}' (from tag '{tag}')")
+              print("::error::Fix: bump pyproject.toml, commit, delete the tag, re-tag, push again.")
+              failed = True
+
+          # Drift guard: setup.py must stay a bare shim. If someone re-adds
+          # version= there it becomes a second source that can disagree, which
+          # is exactly the failure mode the tri-source guard exists to catch in
+          # repos that already have one.
+          setup_src = pathlib.Path("setup.py").read_text()
+          for node in ast.walk(ast.parse(setup_src)):
+              if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "setup":
+                  for kw in node.keywords:
+                      if kw.arg == "version":
+                          print("::error::setup.py has grown a version= kwarg. This repo keeps a "
+                                "single version source (pyproject.toml); remove it, or convert "
+                                "this job to a full tri-source guard.")
+                          failed = True
+
+          # Same guard for a literal __version__ in the package.
+          init_src = pathlib.Path("nmtcmapper/__init__.py").read_text()
+          for node in ast.parse(init_src).body:
+              if isinstance(node, ast.Assign):
+                  for target in node.targets:
+                      if isinstance(target, ast.Name) and target.id == "__version__":
+                          if isinstance(node.value, ast.Constant):
+                              print("::error::nmtcmapper/__init__.py declares a literal __version__ "
+                                    f"({node.value.value!r}). It is supposed to be derived from "
+                                    "importlib.metadata. Remove the literal or add it to this guard.")
+                              failed = True
+
+          if failed:
+              sys.exit(1)
+          print(f"Version guard passed: pyproject.toml == {expected}, no competing source")
+          PY
+
+  # ── 2. Build once, from the tagged commit ─────────────────────────────────
   build:
-    name: Build wheel
-    needs: verify-version
+    name: Build wheel and sdist
+    needs: [verify-version]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.11'
+          python-version: "3.12"
 
-      - name: Install build toolchain
-        run: pip install build
-
-      - name: Build wheel and sdist
-        run: python -m build
+      - name: Build distributions
+        run: |
+          set -euo pipefail
+          python -m pip install build
+          python -m build
+          ls -l dist/
 
       - name: Upload dist artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: dist-wheel
+          name: dist
           path: dist/
-          retention-days: 7
+          if-no-files-found: error
 
-  # ── Step 3: Install the wheel in a fresh venv and run the full test suite ─
-  # Critically: pytest is invoked from the venv, NOT from the source tree.
-  # This catches any discrepancy between the installed wheel and the repo code.
+  # ── 3. Test the built WHEEL on every supported Python ─────────────────────
   test-wheel:
-    name: Test wheel — Python ${{ matrix.python-version }}
-    needs: build
+    name: test wheel (py${{ matrix.python-version }})
+    needs: [build]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Mirrors ci.yml and pyproject's requires-python = ">=3.9".
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+    steps:
+      - name: Checkout (for the tests/ directory only)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist/
+
+      - name: Install the wheel into a fresh venv and test it
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv "${RUNNER_TEMP}/wheel-venv"
+          VPY="${RUNNER_TEMP}/wheel-venv/bin/python"
+          "${VPY}" -m pip install --upgrade pip
+          WHEEL="$(ls dist/*.whl)"
+          echo "Installing wheel: ${WHEEL}"
+          "${VPY}" -m pip install "${WHEEL}" pytest
+
+          # Everything below runs from a directory that does NOT contain
+          # ./nmtcmapper. This is load-bearing, not tidiness: `python -c` puts
+          # the cwd on sys.path, so the previous version of this step imported
+          # the source tree and called it a verified wheel.
+          TESTDIR="${RUNNER_TEMP}/wheel-tests"
+          mkdir -p "${TESTDIR}"
+          cp -R tests "${TESTDIR}/tests"
+          cd "${TESTDIR}"
+
+          # Assert the import really came from the installed wheel. Without
+          # this, the version check below proves nothing -- and in this repo it
+          # would still PASS against source, because __version__ comes from
+          # importlib.metadata rather than from the module's own code.
+          ORIGIN="$("${VPY}" -c 'import nmtcmapper; print(nmtcmapper.__file__)')"
+          echo "import resolved to    : ${ORIGIN}"
+          case "${ORIGIN}" in
+            *"/site-packages/"*) ;;
+            *) echo "::error::import nmtcmapper resolved to '${ORIGIN}', not the installed wheel"; exit 1 ;;
+          esac
+
+          INSTALLED="$("${VPY}" -c 'import nmtcmapper; print(nmtcmapper.__version__)')"
+          EXPECTED="${GITHUB_REF_NAME#v}"
+          echo "installed __version__ : ${INSTALLED}"
+          echo "expected (from tag)   : ${EXPECTED}"
+          if [ "${INSTALLED}" != "${EXPECTED}" ]; then
+            echo "::error::Installed wheel reports '${INSTALLED}', expected '${EXPECTED}'"
+            exit 1
+          fi
+
+          "${VPY}" -m pytest tests -v --tb=short -m "not live" --import-mode=importlib
+
+  # ── 4. Test the built SDIST, running the suite THAT SHIPPED INSIDE IT ─────
+  #
+  # This job exists because job 3 cannot catch a broken sdist: it copies tests/
+  # from the git checkout, so the tarball could ship zero tests and every gate
+  # would still be green. That is not hypothetical here -- see the header.
+  # Nothing in this job comes from the repository.
+  test-sdist:
+    name: test sdist (py${{ matrix.python-version }})
+    needs: [build]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.9", "3.10", "3.11", "3.12"]
-
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
-
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+      # NOTE: deliberately NO actions/checkout. If the checkout is absent, it
+      # cannot leak into the thing under test.
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Download wheel artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+      - name: Download dist artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: dist-wheel
+          name: dist
           path: dist/
 
-      - name: Install wheel into fresh venv (no source editable install)
+      - name: Unpack the sdist, install it, and run its own suite
+        shell: bash
         run: |
-          python -m venv /tmp/wheel_test_venv
-          /tmp/wheel_test_venv/bin/pip install --upgrade pip
-          /tmp/wheel_test_venv/bin/pip install dist/*.whl "pytest>=7"
+          set -euo pipefail
+          SDIST="$(ls dist/*.tar.gz)"
+          echo "sdist under test: ${SDIST}"
 
-      - name: Confirm the installed version matches the tag
-        run: |
-          INSTALLED=$(/tmp/wheel_test_venv/bin/python -c \
-            "import nmtcmapper; print(nmtcmapper.__version__)")
-          TAG="${GITHUB_REF#refs/tags/v}"
-          echo "Installed version : $INSTALLED"
-          echo "Expected (tag)    : $TAG"
-          if [ "$INSTALLED" != "$TAG" ]; then
-            echo "ERROR: installed __version__ does not match the git tag."
+          WORK="${RUNNER_TEMP}/sdist-work"
+          mkdir -p "${WORK}"
+          tar xzf "${SDIST}" -C "${WORK}"
+          SRC="$(find "${WORK}" -maxdepth 1 -mindepth 1 -type d)"
+          echo "--- files the sdist actually contains ---"
+          tar tzf "${SDIST}"
+
+          # Fail with a sentence, not with 33 fixture errors. Without this the
+          # suite still "runs" -- it just errors at collection in a way that
+          # reads like a broken test rather than broken packaging.
+          for required in tests/conftest.py tests/__init__.py README.md pyproject.toml; do
+            if [ ! -f "${SRC}/${required}" ]; then
+              echo "::error::sdist is missing ${required} — check MANIFEST.in (recursive-include tests *.py)"
+              exit 1
+            fi
+          done
+
+          python -m venv "${RUNNER_TEMP}/sdist-venv"
+          VPY="${RUNNER_TEMP}/sdist-venv/bin/python"
+          "${VPY}" -m pip install --upgrade pip
+          "${VPY}" -m pip install "${SDIST}" pytest
+
+          # Run from a directory containing ONLY what the sdist shipped, and NOT
+          # ./nmtcmapper. Running from ${SRC} itself would put the unpacked
+          # source tree on sys.path and silently test that instead.
+          TESTDIR="${RUNNER_TEMP}/sdist-tests"
+          mkdir -p "${TESTDIR}"
+          cp -R "${SRC}/tests" "${TESTDIR}/tests"
+          cp "${SRC}/README.md" "${TESTDIR}/README.md"
+          cd "${TESTDIR}"
+
+          ORIGIN="$("${VPY}" -c 'import nmtcmapper; print(nmtcmapper.__file__)')"
+          echo "import resolved to    : ${ORIGIN}"
+          case "${ORIGIN}" in
+            *"/site-packages/"*) ;;
+            *) echo "::error::import nmtcmapper resolved to '${ORIGIN}', not the installed sdist"; exit 1 ;;
+          esac
+
+          INSTALLED="$("${VPY}" -c 'import nmtcmapper; print(nmtcmapper.__version__)')"
+          EXPECTED="${GITHUB_REF_NAME#v}"
+          if [ "${INSTALLED}" != "${EXPECTED}" ]; then
+            echo "::error::Installed sdist reports '${INSTALLED}', expected '${EXPECTED}'"
             exit 1
           fi
 
-      - name: Run test suite against installed wheel
-        run: |
-          /tmp/wheel_test_venv/bin/pytest tests/ \
-            -v --tb=short \
-            --no-header \
-            -m "not live" \
-            --import-mode=importlib
+          "${VPY}" -m pytest tests -m "not live" --import-mode=importlib
 
-  # ── Step 4: Publish to PyPI — only after guard + build + all tests pass ───
+      - name: Assert the sdist suite is not silently truncated
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDIST="$(ls dist/*.tar.gz)"
+          SHIPPED="$(tar tzf "${SDIST}" | grep -c '/tests/test_.*\.py$' || true)"
+          echo "test modules in sdist: ${SHIPPED}"
+          # Guards the inverse failure: a MANIFEST.in that is present but
+          # matches nothing, so the job passes by running almost no tests.
+          if [ "${SHIPPED}" -lt 14 ]; then
+            echo "::error::sdist ships only ${SHIPPED} test modules; expected at least 14"
+            exit 1
+          fi
+
+  # ── 5. docs-check: does the README describe the artifact being shipped? ───
+  # Runs against the installed WHEEL, from a directory with no ./nmtcmapper --
+  # the same rule as every other gate here, for the same reason.
+  docs-check:
+    name: docs-check (README vs installed wheel)
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python 3.12
+        # 3.12 for tomllib, which docs_check.py uses to read docs-check.toml.
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist/
+
+      - name: Run docs-check against the installed wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv "${RUNNER_TEMP}/docs-venv"
+          VPY="${RUNNER_TEMP}/docs-venv/bin/python"
+          "${VPY}" -m pip install --upgrade pip
+          "${VPY}" -m pip install "$(ls dist/*.whl)" pytest
+
+          DOCSDIR="${RUNNER_TEMP}/docs-check"
+          mkdir -p "${DOCSDIR}/docs"
+          cp -R tests "${DOCSDIR}/tests"
+          cp -R tools "${DOCSDIR}/tools"
+          cp -R docs/README.expected "${DOCSDIR}/docs/README.expected"
+          cp README.md pyproject.toml setup.py docs-check.toml \
+             docs-check-denylist.txt "${DOCSDIR}/"
+          cd "${DOCSDIR}"
+
+          "${VPY}" tools/docs_check.py --root .
+
+  # ── 6. Metadata gate ──────────────────────────────────────────────────────
+  twine-check:
+    name: twine check (sdist + wheel)
+    needs: [test-wheel, test-sdist, docs-check]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist/
+
+      - name: twine check --strict
+        run: |
+          set -euo pipefail
+          python -m pip install twine
+          ls -l dist/
+          python -m twine check --strict dist/*
+
+  # ── 7. Publish ────────────────────────────────────────────────────────────
   publish:
-    name: Publish to PyPI
-    needs: [verify-version, build, test-wheel]
+    name: Publish to PyPI (Trusted Publisher / OIDC)
+    needs: [verify-version, build, test-wheel, test-sdist, docs-check, twine-check]
     runs-on: ubuntu-latest
     environment:
       name: pypi
       url: https://pypi.org/project/nmtc-mapper/
     permissions:
-      id-token: write   # required for OIDC trusted publishing
-
+      id-token: write
     steps:
-      - name: Download wheel artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+      - name: Download dist artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: dist-wheel
+          name: dist
           path: dist/
 
-      - name: Publish to PyPI (trusted publishing — no API token needed)
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # v1.14.0
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+        with:
+          # Default is already true on v1.11+; stated explicitly so a future
+          # action upgrade cannot silently drop provenance.
+          attestations: true
