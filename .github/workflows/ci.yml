@@ -15,10 +15,10 @@ jobs:
         python-version: ["3.9", "3.10", "3.11", "3.12"]
 
     steps:
-    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
       with:
         python-version: ${{ matrix.python-version }}
 
@@ -31,3 +31,61 @@ jobs:
       # `-m "not live"` deselects network tests (the offline suite is exhaustive
       # and hermetic). This is deselection, not a skip marker.
       run: pytest tests/ -v -m "not live"
+
+  # The README gate, run on every PR rather than only at tag time -- a release
+  # is the wrong place to first learn the docs drifted. It builds a wheel and
+  # checks against THAT, from a directory with no ./nmtcmapper on it, because a
+  # docs gate that reads the source tree repeats the defect it exists to catch.
+  docs-check:
+    name: docs-check (README vs built wheel)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+    - name: Set up Python 3.12
+      # 3.12 for tomllib, which docs_check.py uses to read docs-check.toml.
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+      with:
+        python-version: '3.12'
+
+    - name: Build the wheel
+      run: |
+        set -euo pipefail
+        python -m pip install --upgrade pip build
+        python -m build --wheel
+
+    - name: Run docs-check against the built wheel
+      shell: bash
+      run: |
+        set -euo pipefail
+        python -m venv "${RUNNER_TEMP}/docs-venv"
+        VPY="${RUNNER_TEMP}/docs-venv/bin/python"
+        "${VPY}" -m pip install --upgrade pip
+        "${VPY}" -m pip install "$(ls dist/*.whl)" pytest
+
+        DOCSDIR="${RUNNER_TEMP}/docs-check"
+        mkdir -p "${DOCSDIR}/docs"
+        cp -R tests "${DOCSDIR}/tests"
+        cp -R tools "${DOCSDIR}/tools"
+        # docs/README.expected is optional, for the same reason setup.py is: a
+        # repo adopting this gate may have no docs/ directory at all
+        # (hmda-analyzer, next in the release queue, does not). Copying it
+        # unconditionally under `set -e` ABORTS THE JOB on such a repo, before
+        # the gate ever runs. When it is absent the gate still fails, but it
+        # fails AT THE GATE and says why.
+        if [ -d docs/README.expected ]; then
+          cp -R docs/README.expected "${DOCSDIR}/docs/README.expected"
+        fi
+        cp README.md pyproject.toml docs-check.toml \
+           docs-check-denylist.txt "${DOCSDIR}/"
+        # setup.py is optional: 6 of the 22 repos in this portfolio are
+        # pyproject-only, so copying it unconditionally would make this job a
+        # hard error on adoption rather than a file copy. Written as an `if`
+        # rather than `[ -f x ] && cp`: the && form only survives `set -e`
+        # while it is not the last statement in the step.
+        if [ -f setup.py ]; then
+          cp setup.py "${DOCSDIR}/"
+        fi
+        cd "${DOCSDIR}"
+
+        "${VPY}" tools/docs_check.py --root .

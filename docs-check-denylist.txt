@@ -1,0 +1,31 @@
+# Retired claims. One term per line; blank lines and #-comments ignored.
+# Matching is case-insensitive substring, against README.md, setup.py, and
+# pyproject.toml's [project].description + .keywords (the fields that become the
+# PyPI project page).
+#
+# A term earns a place here when it was withdrawn from the portfolio for being
+# wrong or unsupportable -- not merely for being out of fashion. The point is
+# that a retired claim tends to survive in metadata long after the README that
+# carried it was corrected, because nobody re-reads a `keywords` array.
+#
+# All three seeds below were live in the portfolio as of the August 2 audit,
+# each of them sitting above an already-corrected README:
+#   CET1                                 -- cdfi-benchmark's PyPI description.
+#                                           CET1 is a Basel III bank-capital
+#                                           ratio; the package reports Tier 1
+#                                           leverage off FDIC call reports and
+#                                           never computed CET1.
+#   disparate-impact                     -- fair-lending-screener keyword. The
+#                                           package computes descriptive
+#                                           distributions; disparate impact is a
+#                                           legal finding it does not make.
+#   the methodology federal examiners use -- fair-lending-screener's GitHub
+#                                           description. No examiner methodology
+#                                           was implemented or verified.
+#
+# nmtc-mapper carries none of these today (verified). They are seeded here so
+# the gate travels with the meaning intact when this file is copied to the next
+# repo, where they ARE live.
+CET1
+disparate-impact
+the methodology federal examiners use

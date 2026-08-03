@@ -26,12 +26,14 @@ get results in seconds, using the same official data source.
 
 ## Installation
 
+    # docs-check: skip shell installation command, not executable Python
     pip install nmtc-mapper
 
 ---
 
 ## Quickstart
 
+    # docs-check: skip NMTCMapper() downloads the multi-MB CDFI Fund file and check_address hits the live Census geocoder
     from nmtcmapper import NMTCMapper
 
     mapper = NMTCMapper()
@@ -73,6 +75,7 @@ substituting demo data. (Before 0.3.4 any failure silently fell back to a
 12-tract synthetic sample, which could report a real, eligible tract as
 "ineligible" — see the CHANGELOG.)
 
+    # docs-check: skip constructs NMTCMapper(), which downloads the CDFI Fund file
     from nmtcmapper import NMTCMapper, NMTCMapperError
 
     try:
@@ -90,6 +93,7 @@ from the top level, so you can catch broadly or precisely.
 opt in to the synthetic sample dataset. This performs **no network calls** and
 stamps the mapper so you can tell demo answers from real ones:
 
+    # docs-check: run sample-mode
     from nmtcmapper import NMTCMapper, load_sample_table
 
     mapper = NMTCMapper.from_sample()   # 12 sample tracts + 6 OZ tracts, offline
@@ -184,9 +188,10 @@ deferred to 0.5.0 — see the CHANGELOG.
 
 ## Running Tests
 
+    # docs-check: skip shell command; the suite is run by CI, not by this gate
     PYTHONPATH=. pytest tests/ -v
 
-99 tests across all modules (including fail-loud, explicit-sample-mode,
+114 tests across all modules (including fail-loud, explicit-sample-mode,
 tri-state eligibility, and async-batch coverage).
 
 ---

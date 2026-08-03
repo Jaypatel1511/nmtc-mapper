@@ -1,0 +1,196 @@
+# docs-check configuration.
+#
+# Adopting this gate in another repo is a copy of tools/docs_check.py plus an
+# edit of this file. The only fields that are repo-specific are
+# [package].import_name and, if the layout differs, the paths below.
+
+[package]
+# The IMPORT name, not the PyPI name. nmtc-mapper on PyPI -> nmtcmapper here.
+#
+# May also be a LIST when one distribution ships more than one documented
+# import path, e.g. hmda-analyzer:
+#     import_name = ["hmdaanalyzer", "hmda_analyzer"]
+# Every name listed is resolved, vetted for site-packages origin, and used for
+# assertions 2 and 6. Configuring only one of two working import paths leaves
+# the other unverified while the gate still reports green.
+import_name = "nmtcmapper"
+readme = "README.md"
+
+# Assertion 6: every name in __all__ must appear somewhere in the README.
+# Default true. Turning it off is a decision to stop checking whether the
+# public API is documented at all -- record why, here, if you ever do.
+require_all_documented = true
+
+[expected]
+# Committed stdout for every block marked '# docs-check: run', so a change in
+# documented output shows up as a reviewable diff in the PR rather than as a
+# number nobody re-derived. Each 'run' block needs its OWN name; two blocks
+# sharing one expected file is a failure, not a convenience.
+dir = "docs/README.expected"
+
+[tests]
+path = "tests"
+# Matches a line like "114 tests across all modules ...". If the README makes no
+# such claim the assertion is skipped -- but if it makes one, it must be true.
+claim_pattern = '^(\d+)\s+tests\b'
+
+[denylist]
+file = "docs-check-denylist.txt"
+# pyproject.toml is scanned only across [project].description and .keywords --
+# the fields that become the PyPI project page. setup.py is scanned whole.
+targets = ["README.md", "pyproject.toml", "setup.py"]
+
+# ---------------------------------------------------------------------------
+# WHAT THIS GATE ASSERTS, AND WHAT IT DOES NOT
+#
+# An operator looking at a green check should be able to learn its scope from
+# here, without reading the source. A gate whose boundary is undocumented gets
+# read as covering everything, which is how a passing check becomes a false
+# assurance.
+#
+# IT ASSERTS:
+#   1. Every README block marked 'run' produces exactly its committed stdout.
+#   2. Every symbol a README block names as importable actually imports.
+#   3. Any "N tests" claim matches what pytest collects.
+#   4. No retired claim from the denylist survives in README.md, setup.py, or
+#      pyproject's [project].description / .keywords.
+#   5. The package under test resolved out of site-packages, not the checkout.
+#   6. Every name in __all__ appears somewhere in the README.
+#
+# IT DOES NOT ASSERT -- these are outside the gate, and a green check says
+# nothing about any of them:
+#   * PROSE CLAIMS. "1,408 of the 8,764 OZ designations (~16%)", "85,395
+#     tracts", "fails loud since 0.3.4", the eligibility thresholds in the
+#     distress table -- no assertion re-derives any number or behaviour stated
+#     in prose. They are checked by a human or not at all.
+#   * INSTANCE ATTRIBUTES AND METHODS. Assertion 2 resolves only top-level
+#     importable names. `mapper.enrich`, `result.summary()`,
+#     `result.eligibility_status`, `NMTCMapper.from_sample` are never resolved,
+#     so the README can rename or delete any of them and stay green.
+#   * THE OUTPUT-COLUMNS TABLE. The nine columns listed under "Output Columns"
+#     are not compared against what .enrich() actually returns. Nothing runs
+#     .enrich() -- it needs the multi-MB CDFI Fund download.
+#   * THE EXCEPTION HIERARCHY'S SHAPE. Assertion 6 checks that each exception
+#     NAME appears in the README. It does not check the inheritance
+#     relationships the README draws (NMTCMapperError -> EligibilityDataError
+#     -> *DownloadError); a rewiring of the hierarchy stays green.
+#   * SKIPPED BLOCKS' RUNTIME BEHAVIOUR. Four of five blocks are skip-marked
+#     because they need network. Their code is scanned for symbols and never
+#     executed, so a skipped block can be wrong in every way except naming a
+#     non-existent import.
+#   * Code inside blockquotes or list items, and >>> doctest blocks -- see the
+#     KNOWN LIMITATIONS section of tools/docs_check.py.
+#
+# ---------------------------------------------------------------------------
+# Known failures -- tracked documentation debt.
+#
+# Every entry is a CLAIM THAT SOMETHING IS BROKEN. Entries are printed loudly on
+# every run, never hidden. An entry that starts passing FAILS the gate, so this
+# list cannot quietly accumulate dead weight. An empty list is the goal state.
+#
+# `id` values come from the [bracketed] identifier docs_check.py prints for each
+# finding.
+#
+# ---------------------------------------------------------------------------
+#
+# WHY THIS LEDGER IS NO LONGER EMPTY.
+#
+# It was empty, and the emptiness was wrong. The gate's first five assertions
+# all run README -> package: each starts from something the README says and asks
+# whether the package agrees. That direction catches DRIFT and is structurally
+# incapable of catching OMISSION -- a public symbol the README simply never
+# mentions. Since every real defect in this README is an omission or a prose
+# claim, the gate passed with all of them live, and the empty ledger read as
+# "clean" when it actually meant "nothing was looked at from this side".
+#
+# Assertion 6 runs package -> README and found TWELVE undocumented exports.
+# Three were predicted. Nine were not: the entire exception-hierarchy leaf set.
+# All twelve are listed below rather than tuned away. They ride 0.5.0 with the
+# README rewrite; the gate now fails the day any of them is documented and its
+# entry is not removed.
+#
+# Still checked and found NOT failing, so deliberately absent:
+#   * denylist -- CET1, disparate-impact and "the methodology federal examiners
+#     use" are absent from this repo's README.md, setup.py and pyproject
+#     description/keywords. Verified by running the gate. They are live in
+#     cdfi-benchmark and fair-lending-screener, not here.
+#   * assertion 2 -- the README's blocks import three top-level names
+#     (NMTCMapper, NMTCMapperError, load_sample_table). All three resolve.
+#   * assertion 1 -- block 4's stdout matches its committed expected file.
+#   * assertion 3 -- the "114 tests" claim matches collection.
+#
+# --- Group A: core public API the README never names (3) --------------------
+# These are the three the audit predicted. Each is a top-level export a user is
+# expected to call directly, absent from the README in every form.
+
+[[known_failures]]
+id = "readme-missing-symbol:EligibilityResult"
+reason = "The return type of check_address()/check_tract(). The Quickstart binds it to `result` and reads four attributes off it, but never names the class, so a user cannot look it up or type-annotate against it. 0.5.0 README rewrite."
+owner_release = "0.5.0"
+
+[[known_failures]]
+id = "readme-missing-symbol:load_eligibility_table"
+reason = "The real-data counterpart to load_sample_table, which IS documented. A reader who found the sample loader has no way to discover the loader for the official CDFI Fund file. 0.5.0 README rewrite."
+owner_release = "0.5.0"
+
+[[known_failures]]
+id = "readme-missing-symbol:geocode_address"
+reason = "The standalone geocoder entry point. The README describes geocoding only as something check_address() does internally, so the directly callable export is undiscoverable. 0.5.0 README rewrite."
+owner_release = "0.5.0"
+
+# --- Group B: exception leaves gestured at by a glob, never named (4) -------
+# README lines 88-90 write the hierarchy as "specific `*DownloadError` /
+# `*ParseError` leaves". The glob is a real gesture at these four, but a reader
+# cannot type a glob into an except clause. Documented as a wildcard is not
+# documented.
+
+[[known_failures]]
+id = "readme-missing-symbol:EligibilityDownloadError"
+reason = "Covered only by the `*DownloadError` glob on README line 89; the literal name never appears. 0.5.0 README rewrite spells out the hierarchy."
+owner_release = "0.5.0"
+
+[[known_failures]]
+id = "readme-missing-symbol:EligibilityParseError"
+reason = "Covered only by the `*ParseError` glob on README line 89; the literal name never appears. 0.5.0 README rewrite spells out the hierarchy."
+owner_release = "0.5.0"
+
+[[known_failures]]
+id = "readme-missing-symbol:OZDownloadError"
+reason = "Covered only by the `*DownloadError` glob on README line 89; the literal name never appears. 0.5.0 README rewrite spells out the hierarchy."
+owner_release = "0.5.0"
+
+[[known_failures]]
+id = "readme-missing-symbol:OZParseError"
+reason = "Covered only by the `*ParseError` glob on README line 89; the literal name never appears. 0.5.0 README rewrite spells out the hierarchy."
+owner_release = "0.5.0"
+
+# --- Group C: exception leaves no glob even reaches (5) ---------------------
+# These match neither `*DownloadError` nor `*ParseError`. The README claims on
+# line 90 that you "can catch broadly or precisely"; for these five the precise
+# option has no referent anywhere in the document. This group is the part the
+# audit did not predict and is the strongest argument for assertion 6.
+
+[[known_failures]]
+id = "readme-missing-symbol:EligibilitySchemaError"
+reason = "Raised when the CDFI Fund file's columns do not match the expected schema. Matches neither glob on README line 89, so it is absent from the README in every form. 0.5.0 README rewrite."
+owner_release = "0.5.0"
+
+[[known_failures]]
+id = "readme-missing-symbol:EligibilityValueError"
+reason = "Raised on unparseable values inside an otherwise well-formed eligibility file. Matches neither glob on README line 89. 0.5.0 README rewrite."
+owner_release = "0.5.0"
+
+[[known_failures]]
+id = "readme-missing-symbol:GeocoderError"
+reason = "Base of the geocoder error family. The README's hierarchy sentence covers only the eligibility and OZ branches, so the entire geocoder branch is undocumented. 0.5.0 README rewrite."
+owner_release = "0.5.0"
+
+[[known_failures]]
+id = "readme-missing-symbol:GeocoderTransportError"
+reason = "Raised when the Census geocoding API is unreachable -- the failure a batch user is most likely to need to catch, and the README never names it. 0.5.0 README rewrite."
+owner_release = "0.5.0"
+
+[[known_failures]]
+id = "readme-missing-symbol:AmbiguousAddressError"
+reason = "Raised when the Census geocoder returns multiple candidate matches. Directly relevant to the documented 10,000-address batch workflow, and absent from the README. 0.5.0 README rewrite."
+owner_release = "0.5.0"
