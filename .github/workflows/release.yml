@@ -115,16 +115,54 @@ jobs:
                           failed = True
 
           # Same guard for a literal __version__ in the package.
-          init_src = pathlib.Path("nmtcmapper/__init__.py").read_text()
-          for node in ast.parse(init_src).body:
+          #
+          # ast.walk, NOT ast.parse(...).body. __version__ in this package is
+          # assigned at lines 16 and 18, INSIDE a try/except PackageNotFoundError
+          # -- which is the only place anyone would ever write it. A top-level-only
+          # scan therefore finds ZERO assignments and the guard becomes structurally
+          # incapable of failing, while still printing "no competing source". That
+          # is a false assurance, which is worse than no guard at all -- and it is
+          # the exact defect class this job exists to catch, shipped inside the fix
+          # for it. Measured on the real file: .body -> 0 hits, ast.walk -> 2.
+          # The setup.py guard ten lines above already used ast.walk correctly.
+          #
+          # AnnAssign is covered too: `__version__: str = "9.9.9"` is the same
+          # competing source wearing an annotation.
+          init_tree = ast.parse(pathlib.Path("nmtcmapper/__init__.py").read_text())
+
+          # The ONE literal this layout is permitted to contain: the sentinel
+          # assigned when the distribution is not installed. Exempt only as an
+          # exact value AND only inside an except handler -- so a planted literal
+          # cannot hide by moving into the except branch. It is a local-version
+          # string that can never be a published release, so it cannot be the
+          # competing source this guard is looking for.
+          SENTINEL = "0.0.0+unknown"
+          in_handler = {
+              id(child)
+              for node in ast.walk(init_tree)
+              if isinstance(node, ast.ExceptHandler)
+              for child in ast.walk(node)
+          }
+
+          for node in ast.walk(init_tree):
               if isinstance(node, ast.Assign):
-                  for target in node.targets:
-                      if isinstance(target, ast.Name) and target.id == "__version__":
-                          if isinstance(node.value, ast.Constant):
-                              print("::error::nmtcmapper/__init__.py declares a literal __version__ "
-                                    f"({node.value.value!r}). It is supposed to be derived from "
-                                    "importlib.metadata. Remove the literal or add it to this guard.")
-                              failed = True
+                  targets, value = node.targets, node.value
+              elif isinstance(node, ast.AnnAssign):
+                  targets, value = [node.target], node.value
+              else:
+                  continue
+              if value is None:
+                  continue
+              if not any(isinstance(t, ast.Name) and t.id == "__version__" for t in targets):
+                  continue
+              if not isinstance(value, ast.Constant):
+                  continue  # e.g. version("nmtc-mapper") -- derived, which is the point
+              if value.value == SENTINEL and id(node) in in_handler:
+                  continue  # the documented not-installed fallback
+              print(f"::error::nmtcmapper/__init__.py line {node.lineno} declares a literal "
+                    f"__version__ ({value.value!r}). It is supposed to be derived from "
+                    "importlib.metadata. Remove the literal or add it to this guard.")
+              failed = True
 
           if failed:
               sys.exit(1)
@@ -151,6 +189,41 @@ jobs:
           python -m pip install build
           python -m build
           ls -l dist/
+
+      # The sdist-completeness assertion lives HERE, not in test-sdist, because
+      # this is the only job holding both the checkout and the tarball. It is an
+      # exact set comparison rather than a magic number: the previous guard was
+      # `-lt 14` while the tarball shipped exactly 14, i.e. zero headroom, so
+      # legitimately deleting or merging a single test module failed the job
+      # with "check MANIFEST.in" -- blaming packaging for a deliberate source
+      # change. The invariant that actually matters is "the tarball contains
+      # every test module the repository has", and that needs no threshold.
+      - name: Assert the sdist ships every test module in the checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDIST="$(ls dist/*.tar.gz)"
+          ls tests/test_*.py | xargs -n1 basename | sort > "${RUNNER_TEMP}/repo-tests.txt"
+          tar tzf "${SDIST}" \
+            | sed -n 's|.*/tests/\(test_[^/]*\.py\)$|\1|p' | sort \
+            > "${RUNNER_TEMP}/sdist-tests.txt"
+
+          echo "test modules in checkout : $(wc -l < "${RUNNER_TEMP}/repo-tests.txt")"
+          echo "test modules in sdist    : $(wc -l < "${RUNNER_TEMP}/sdist-tests.txt")"
+
+          if [ ! -s "${RUNNER_TEMP}/sdist-tests.txt" ]; then
+            echo "::error::sdist ships no test modules at all — MANIFEST.in matches nothing"
+            exit 1
+          fi
+
+          MISSING="$(comm -23 "${RUNNER_TEMP}/repo-tests.txt" "${RUNNER_TEMP}/sdist-tests.txt")"
+          if [ -n "${MISSING}" ]; then
+            echo "::error::sdist is missing test modules that exist in the checkout:"
+            echo "${MISSING}"
+            echo "::error::Fix MANIFEST.in (recursive-include tests *.py)."
+            exit 1
+          fi
+          echo "sdist ships every test module in the checkout"
 
       - name: Upload dist artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -202,6 +275,13 @@ jobs:
           TESTDIR="${RUNNER_TEMP}/wheel-tests"
           mkdir -p "${TESTDIR}"
           cp -R tests "${TESTDIR}/tests"
+          # Same reason as test-sdist: [tool.pytest.ini_options] registers the
+          # `live` marker, and without the ini file in the run directory this
+          # job also emitted PytestUnknownMarkWarning. tests/ already comes from
+          # the checkout in this job, so taking pyproject.toml from it too
+          # changes nothing about what is under test -- the WHEEL still supplies
+          # the package, which is what the origin assertion above pins down.
+          cp pyproject.toml "${TESTDIR}/pyproject.toml"
           cd "${TESTDIR}"
 
           # Assert the import really came from the installed wheel. Without
@@ -224,7 +304,7 @@ jobs:
             exit 1
           fi
 
-          "${VPY}" -m pytest tests -v --tb=short -m "not live" --import-mode=importlib
+          "${VPY}" -m pytest tests -v --tb=short -m "not live" --import-mode=importlib --strict-markers
 
   # ── 4. Test the built SDIST, running the suite THAT SHIPPED INSIDE IT ─────
   #
@@ -290,6 +370,14 @@ jobs:
           mkdir -p "${TESTDIR}"
           cp -R "${SRC}/tests" "${TESTDIR}/tests"
           cp "${SRC}/README.md" "${TESTDIR}/README.md"
+          # pyproject.toml comes along FROM THE TARBALL (not the repo -- this job
+          # still has no checkout) because it carries [tool.pytest.ini_options],
+          # where the `live` marker is registered. Without it pytest finds no ini
+          # file here, the registration never applies, and the run emitted
+          # PytestUnknownMarkWarning while still passing. That is a latent break:
+          # the marker is what `-m "not live"` deselects on, so --strict-markers
+          # turns the warning into a collection ERROR. Verified both ways.
+          cp "${SRC}/pyproject.toml" "${TESTDIR}/pyproject.toml"
           cd "${TESTDIR}"
 
           ORIGIN="$("${VPY}" -c 'import nmtcmapper; print(nmtcmapper.__file__)')"
@@ -306,7 +394,10 @@ jobs:
             exit 1
           fi
 
-          "${VPY}" -m pytest tests -m "not live" --import-mode=importlib
+          # --strict-markers so an unregistered marker can never again pass as a
+          # warning: if the ini file stops reaching this directory, the job fails
+          # loudly instead of silently deselecting nothing.
+          "${VPY}" -m pytest tests -m "not live" --import-mode=importlib --strict-markers
 
       - name: Assert the sdist suite is not silently truncated
         shell: bash
@@ -315,10 +406,17 @@ jobs:
           SDIST="$(ls dist/*.tar.gz)"
           SHIPPED="$(tar tzf "${SDIST}" | grep -c '/tests/test_.*\.py$' || true)"
           echo "test modules in sdist: ${SHIPPED}"
-          # Guards the inverse failure: a MANIFEST.in that is present but
-          # matches nothing, so the job passes by running almost no tests.
-          if [ "${SHIPPED}" -lt 14 ]; then
-            echo "::error::sdist ships only ${SHIPPED} test modules; expected at least 14"
+          # This job deliberately has NO checkout, so it cannot compare the
+          # tarball against the repository -- that exact comparison lives in
+          # `build`, which holds both. What this job CAN assert with nothing but
+          # the tarball is that MANIFEST.in did not match nothing at all, which
+          # is the failure that would otherwise let the suite "pass" by running
+          # zero tests. Deliberately not an absolute threshold: the old `-lt 14`
+          # was pinned to the exact count shipping that day, so removing any one
+          # test module failed this job with a packaging error for a source
+          # change that packaging had nothing to do with.
+          if [ "${SHIPPED}" -eq 0 ]; then
+            echo "::error::sdist ships no test modules at all — MANIFEST.in matches nothing"
             exit 1
           fi
 
@@ -358,14 +456,29 @@ jobs:
           mkdir -p "${DOCSDIR}/docs"
           cp -R tests "${DOCSDIR}/tests"
           cp -R tools "${DOCSDIR}/tools"
-          cp -R docs/README.expected "${DOCSDIR}/docs/README.expected"
+          # docs/README.expected is optional, for the same reason setup.py is:
+          # a repo adopting this gate may have no docs/ directory at all
+          # (hmda-analyzer, next in the release queue, does not). Copying it
+          # unconditionally under `set -e` ABORTS THE JOB on such a repo -- the
+          # step dies at a file copy, before the gate ever runs, so the operator
+          # sees an infrastructure error instead of a documentation verdict.
+          # When it is absent the gate still fails, but it fails AT THE GATE and
+          # says why: every 'run' block reports its missing expected-output file.
+          if [ -d docs/README.expected ]; then
+            cp -R docs/README.expected "${DOCSDIR}/docs/README.expected"
+          fi
           cp README.md pyproject.toml docs-check.toml \
              docs-check-denylist.txt "${DOCSDIR}/"
           # setup.py is optional: 6 of the 22 repos in this portfolio are
           # pyproject-only, so copying it unconditionally would make this job
           # a hard error on adoption rather than a file copy. docs_check.py
-          # already logs an absent denylist target as a note.
-          [ -f setup.py ] && cp setup.py "${DOCSDIR}/"
+          # already logs an absent denylist target as a note. Written as an
+          # `if` rather than `[ -f x ] && cp`, because the && form only survives
+          # `set -e` while it is not the last statement in the step -- a footgun
+          # that arms itself the moment someone appends nothing after it.
+          if [ -f setup.py ]; then
+            cp setup.py "${DOCSDIR}/"
+          fi
           cd "${DOCSDIR}"
 
           "${VPY}" tools/docs_check.py --root .

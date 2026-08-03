@@ -29,14 +29,76 @@ Concretely that means this script fails closed on every ambiguity:
   * A known-failure ledger entry that has started passing is a FAILURE, so the
     ledger cannot silently accumulate dead weight.
 
-Both README code-block styles are supported -- fenced (```python) and 4-space
-indented -- because the portfolio is split almost exactly in half between them.
-A checker that only parsed fences would report PASS with zero coverage on the
-eleven indented-style repos, which is the same class of defect as a version
-check that imports source.
+Both README code-block styles are supported -- fenced (```python) and indented
+(4 spaces OR a tab) -- because the portfolio is split almost exactly in half
+between them. A checker that only parsed fences would report PASS with zero
+coverage on the eleven indented-style repos, which is the same class of defect
+as a version check that imports source.
 
 Because indented blocks carry no info string, the run/skip marker is a comment
 on the block's first line. One mechanism, both styles.
+
+THE SIX ASSERTIONS
+------------------
+  1. Every block marked `run` produces exactly its committed stdout.
+  2. Every symbol a block names as importable actually imports (README ->
+     package: catches DRIFT).
+  3. Any "N tests" claim in the README matches what pytest collects.
+  4. No retired claim from the denylist survives in README/setup.py/pyproject
+     description+keywords.
+  5. Precondition: the package resolves out of site-packages, not the checkout.
+  6. Every name in `__all__` appears somewhere in the README (package ->
+     README: catches OMISSION).
+
+Assertion 6 exists because 1-5 all run in the README -> package direction. They
+can only catch the README claiming something false. They are structurally blind
+to the README failing to mention a public symbol at all -- and on this repo
+every real documentation defect was an omission or a prose claim, which is how
+an all-green gate coexisted with nine of them.
+
+BLOCK STYLES, INCLUDING THE ONE THAT SURPRISED US
+-------------------------------------------------
+Three styles reach the extractor, not two:
+
+  * fenced with a language tag   -- ```python, ```bash
+  * fenced with NO language tag  -- a bare ``` .
+  * indented by 4 spaces or by a tab.
+
+INTENDED BEHAVIOUR FOR AN UNTAGGED FENCE: it is extracted, and it requires a
+marker, exactly like any other block. This is deliberate. The alternative --
+skipping fences that carry no language tag -- would silently drop real
+documented content and hand back a green check with no coverage over it, which
+is the defect class this tool exists to refuse. Fail closed, as everywhere else.
+
+This is live, not hypothetical, and the shape of it is worth recording because
+two earlier descriptions of it were wrong. MEASURED on nmtc-screener's README
+(the repo an earlier portfolio scan wrote off as "prose-only" because it
+grepped for ```python): 12 fence LINES, which is 6 blocks, not 12. Five carry
+```bash. Exactly ONE is a bare fence, and it is not shell -- it is 39 lines of
+SAMPLE PROGRAM OUTPUT, a rendered screening report. Adoption there costs 6
+markers, not 12.
+
+That one block exposes a real tension worth knowing before the next adoption:
+the marker is the block's first BODY line, so on an output block it is visible
+to every reader of the rendered README. Inside ```bash a `#` marker is valid
+shell and reads as a comment; inside a sample-output block it is simply noise
+in the middle of the documented output. The mechanism is still correct -- fail
+closed beats silently uncovered -- but a repo that documents output in bare
+fences pays for the gate in rendered-doc cleanliness, and that trade should be
+made deliberately rather than discovered.
+
+KNOWN LIMITATIONS (recorded, not fixed -- adversarial-only, zero live
+occurrences measured across 25 portfolio READMEs):
+
+  * Code fenced INSIDE a blockquote ("> ```python") is not extracted.
+  * Code nested inside a list item is treated as list continuation, not code
+    (see _is_list_continuation).
+  * `>>>` doctest / pycon blocks are not executed as doctests.
+
+Each of these fails OPEN -- the block is invisible rather than misread -- so
+they are coverage gaps, not false assurances. They are written down here rather
+than left undiscovered, because an undocumented gap is indistinguishable from a
+gap nobody knows about. Run --list-blocks to see exactly what was extracted.
 
 Usage:
     python tools/docs_check.py [--root DIR] [--list-blocks] [--allow-source]
@@ -47,6 +109,7 @@ Exit status: 0 = pass, 1 = failure, 2 = configuration error.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib
 import io
 import os
@@ -98,12 +161,48 @@ class Block:
         return "\n".join(self.body)
 
     @property
+    def has_marker(self) -> bool:
+        """True if body[0] is actually a docs-check marker line."""
+        return bool(self.body) and MARKER_RE.match(self.body[0].strip()) is not None
+
+    @property
     def code(self) -> str:
-        """Body with the marker line removed -- what actually executes."""
-        return "\n".join(self.body[1:])
+        """Body with the marker line removed -- what actually executes.
+
+        Conditional on a marker actually being present. Dropping body[0]
+        unconditionally silently ate the first real line of any UNMARKED block.
+        That is masked on the failure path (unmarked blocks fail anyway), but it
+        corrupts --list-blocks and every coverage number derived from it -- it
+        made the audit's own first measurement of this tool wrong.
+        """
+        return "\n".join(self.body[1:] if self.has_marker else self.body)
 
     def label(self) -> str:
         return f"block {self.index} ({self.style}, README.md:{self.line_no})"
+
+
+def _expand_leading_tabs(line: str, tabstop: int = 4) -> str:
+    """Expand a line's LEADING whitespace run, tabs included, to spaces.
+
+    CommonMark treats a tab as advancing to the next multiple of four, and a
+    tab-indented block is a code block just like a 4-space one. The indent
+    arithmetic everywhere below counts spaces, so a single tab measured as
+    indent 0 and the whole block vanished -- no error, no coverage, green check.
+    Measured zero times across 25 portfolio READMEs, but it is one keystroke
+    away and free to close.
+
+    Only the leading run is rewritten, so tabs inside string literals or in
+    trailing alignment survive byte-for-byte.
+    """
+    col = 0
+    for i, ch in enumerate(line):
+        if ch == "\t":
+            col += tabstop - (col % tabstop)
+        elif ch == " ":
+            col += 1
+        else:
+            return " " * col + line[i:]
+    return " " * col
 
 
 def _consume_indented(lines: Sequence[str], start: int) -> Tuple[List[str], int]:
@@ -145,8 +244,15 @@ def _is_list_continuation(lines: Sequence[str], idx: int) -> bool:
 
 
 def extract_blocks(text: str) -> List[Block]:
-    """Extract code blocks in BOTH styles, in document order."""
-    lines = text.split("\n")
+    """Extract code blocks in every supported style, in document order.
+
+    Fenced blocks are recognised whether or not they carry a language tag; see
+    the module docstring for why an untagged fence is treated as code rather
+    than skipped.
+    """
+    # Normalise leading tabs first so every indent measurement below is in
+    # spaces and tab-indented blocks are seen at all (see _expand_leading_tabs).
+    lines = [_expand_leading_tabs(ln) for ln in text.split("\n")]
     blocks: List[Block] = []
     i = 0
     n = len(lines)
@@ -265,8 +371,30 @@ class Report:
 
 
 def slug(text: str, limit: int = 40) -> str:
+    """A finding-id fragment that is readable AND unambiguous.
+
+    The bare `s[:limit]` this replaces was not a cosmetic choice. Two denylist
+    terms whose slugs shared a 40-character prefix collapsed to ONE finding id,
+    so a single ledger entry written for one of them silently suppressed the
+    others -- a ledger entry granting an exemption it was never reviewed for.
+    Demonstrated on the seeded term's own family:
+
+        'the methodology federal examiners use to grade banks'  ->
+        'the methodology federal examiners use to assess CRA'   ->
+            both slugged to 'the-methodology-federal-examiners-use-to'
+
+    and one [[known_failures]] entry took both out, EXIT=0. The denylist is
+    explicitly designed to travel across 22 repos and grow, so prefix collision
+    is a question of when, not whether.
+
+    Long terms now keep a readable prefix plus a digest of the FULL term, so
+    ids stay greppable without ever being ambiguous.
+    """
     s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
-    return s[:limit]
+    if len(s) <= limit:
+        return s
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
+    return f"{s[:limit - 9].rstrip('-')}-{digest}"
 
 
 # --------------------------------------------------------------------------
@@ -274,37 +402,47 @@ def slug(text: str, limit: int = 40) -> str:
 # --------------------------------------------------------------------------
 
 
-def resolve_package(import_name: str, allow_source: bool) -> object:
-    try:
-        mod = importlib.import_module(import_name)
-    except Exception as exc:  # noqa: BLE001
-        sys.stderr.write(
-            f"docs-check: cannot import '{import_name}': {exc}\n"
-            f"  The package must be INSTALLED before this gate runs.\n"
-        )
-        raise SystemExit(2)
+def resolve_packages(import_names: Sequence[str], allow_source: bool) -> List[object]:
+    """Resolve and vet EVERY configured import name.
 
-    origin = getattr(mod, "__file__", None) or "<unknown>"
-    print(f"  package        : {import_name}")
-    print(f"  import origin  : {origin}")
+    [package].import_name accepts a list because a single distribution can ship
+    more than one documented import path, and checking only one leaves the other
+    unverified while the gate reports green. hmda-analyzer -- next but one in the
+    adoption queue -- ships both `hmdaanalyzer` and `hmda_analyzer`, both
+    documented and both working, so whichever you configured, the other went
+    unchecked. A scalar string is still accepted and means a one-element list.
+    """
+    mods: List[object] = []
+    for import_name in import_names:
+        try:
+            mod = importlib.import_module(import_name)
+        except Exception as exc:  # noqa: BLE001
+            sys.stderr.write(
+                f"docs-check: cannot import '{import_name}': {exc}\n"
+                f"  The package must be INSTALLED before this gate runs.\n"
+            )
+            raise SystemExit(2)
 
-    if "/site-packages/" in origin.replace(os.sep, "/"):
-        print("  artifact       : installed distribution  [OK]")
-        return mod
+        origin = getattr(mod, "__file__", None) or "<unknown>"
+        print(f"  package        : {import_name}")
+        print(f"  import origin  : {origin}")
 
-    if allow_source:
-        print("  artifact       : SOURCE TREE (--allow-source given) [degraded]")
-        return mod
-
-    sys.stderr.write(
-        "\ndocs-check: FATAL -- import resolved to the source tree, not an\n"
-        f"  installed distribution:\n    {origin}\n"
-        "  Checking the source tree would repeat the exact defect this gate\n"
-        "  exists to catch. Install the wheel and run from a directory that\n"
-        f"  does not contain ./{import_name}, or pass --allow-source for local\n"
-        "  development only.\n"
-    )
-    raise SystemExit(2)
+        if "/site-packages/" in origin.replace(os.sep, "/"):
+            print("  artifact       : installed distribution  [OK]")
+        elif allow_source:
+            print("  artifact       : SOURCE TREE (--allow-source given) [degraded]")
+        else:
+            sys.stderr.write(
+                "\ndocs-check: FATAL -- import resolved to the source tree, not an\n"
+                f"  installed distribution:\n    {origin}\n"
+                "  Checking the source tree would repeat the exact defect this gate\n"
+                "  exists to catch. Install the wheel and run from a directory that\n"
+                f"  does not contain ./{import_name}, or pass --allow-source for local\n"
+                "  development only.\n"
+            )
+            raise SystemExit(2)
+        mods.append(mod)
+    return mods
 
 
 # --------------------------------------------------------------------------
@@ -334,9 +472,28 @@ def check_block_outputs(
         )
         return
 
+    # Same id-collision class as slug(): two run blocks pointing at one
+    # expected-file name produced one shared finding id, so a ledger entry for
+    # the first silently exempted the second. It is also a latent bug in its own
+    # right -- both blocks get diffed against the same committed stdout -- so it
+    # is reported rather than merely disambiguated.
+    by_name: Dict[str, List[Block]] = {}
+    for block in runnable:
+        by_name.setdefault(expected_path(root, expected_dir, block).name, []).append(block)
+    for name, sharing in by_name.items():
+        if len(sharing) > 1:
+            report.fail(
+                f"readme-output-name-collision:{name}",
+                f"{len(sharing)} run blocks share the expected-output file {name!r}: "
+                + ", ".join(b.label() for b in sharing)
+                + "\n      Give each 'run' block its own name: '# docs-check: run <name>'.",
+            )
+
     for block in runnable:
         exp = expected_path(root, expected_dir, block)
-        fid = f"readme-output:{exp.name}"
+        # Block index is part of the id so two blocks can never share one, even
+        # while the collision above is being fixed.
+        fid = f"readme-output:{block.index}:{exp.name}"
 
         if not exp.exists():
             report.fail(
@@ -457,11 +614,21 @@ def extract_symbols(blocks: Iterable[Block], import_name: str) -> List[Tuple[str
 
 
 def check_symbols(
-    blocks: List[Block], import_name: str, report: Report
+    blocks: List[Block], import_names: Sequence[str], report: Report
 ) -> None:
-    symbols = extract_symbols(blocks, import_name)
+    symbols: List[Tuple[str, str, Block]] = []
+    seen = set()
+    for import_name in import_names:
+        for module_name, symbol, block in extract_symbols(blocks, import_name):
+            if (module_name, symbol) not in seen:
+                seen.add((module_name, symbol))
+                symbols.append((module_name, symbol, block))
+
     if not symbols:
-        report.note(f"no {import_name} symbols referenced in README blocks")
+        report.note(
+            "no symbols referenced in README blocks for "
+            + "/".join(import_names)
+        )
         return
 
     for module_name, symbol, block in symbols:
@@ -483,6 +650,71 @@ def check_symbols(
             )
         else:
             report.note(f"symbol {module_name}.{symbol} resolves")
+
+
+# --------------------------------------------------------------------------
+# Assertion 6: every public name in __all__ is mentioned in the README
+# --------------------------------------------------------------------------
+
+
+def check_all_documented(
+    readme: str, import_names: Sequence[str], report: Report, enabled: bool = True
+) -> None:
+    """Assertion 6 -- the only assertion that runs package -> README.
+
+    Assertions 1-5 all run README -> package. Every one of them starts from
+    something the README says and asks whether the package agrees, so the whole
+    set is structurally blind to the README simply NOT MENTIONING a public
+    symbol. On this repo that blindness was the whole story: the gate was green
+    with nine real README defects live, and every one of them was an omission or
+    a prose claim rather than a false import.
+
+    The test is deliberately weak: the name must appear SOMEWHERE in the README
+    text -- prose, a code block, a bullet, anywhere. It does not ask for a
+    signature, an example, or a section. A stronger check would be an opinion
+    about documentation quality; this one is a fact about coverage, and a fact
+    is what a gate can defend. Weak and true beats strong and arguable.
+
+    Default ON. A repo that genuinely exports something it does not want
+    documented says so in the ledger, where the claim is visible and owned.
+    """
+    if not enabled:
+        report.note("assertion 6 (__all__ documented) disabled in config")
+        return
+
+    # Keyed on the SYMBOL, not on (symbol, package). "This name never appears in
+    # the README" is a fact about the README, so it is one finding no matter how
+    # many import paths export the name -- otherwise two documented import paths
+    # would produce two findings sharing one id, which is exactly the ledger
+    # over-suppression bug fixed in slug() and in the expected-file names.
+    missing: Dict[str, List[str]] = {}
+    checked: set = set()
+    for import_name in import_names:
+        try:
+            mod = importlib.import_module(import_name)
+        except Exception:  # noqa: BLE001 - resolve_packages already exited on this
+            continue
+        names = getattr(mod, "__all__", None)
+        if not names:
+            report.note(f"{import_name} defines no __all__ -- assertion 6 skipped")
+            continue
+        for name in names:
+            checked.add(name)
+            if re.search(r"\b" + re.escape(name) + r"\b", readme):
+                continue
+            missing.setdefault(name, []).append(import_name)
+
+    for name, owners in missing.items():
+        report.fail(
+            f"readme-missing-symbol:{name}",
+            f"{'/'.join(owners)}.__all__ exports '{name}' but the README never "
+            f"mentions it. A public name the docs do not name is undiscoverable.",
+        )
+
+    if checked and not missing:
+        report.note(
+            f"all {len(checked)} __all__ export(s) are mentioned in the README"
+        )
 
 
 # --------------------------------------------------------------------------
@@ -554,10 +786,29 @@ def load_denylist(path: Path) -> List[str]:
     return terms
 
 
+def load_toml(path: Path, what: str) -> dict:
+    """Parse TOML, or exit 2 -- the documented configuration-error status.
+
+    An uncaught TOMLDecodeError exits 1 with a traceback, which makes a broken
+    config indistinguishable from a documentation failure to any wrapper that
+    reads exit codes -- and the docstring promises 2 means configuration error.
+    A gate whose exit codes lie about the KIND of problem is a gate that gets
+    retried instead of fixed.
+    """
+    try:
+        with open(path, "rb") as fh:
+            return tomllib.load(fh)
+    except tomllib.TOMLDecodeError as exc:
+        sys.stderr.write(f"docs-check: {what} at {path} is not valid TOML: {exc}\n")
+        raise SystemExit(2)
+    except OSError as exc:
+        sys.stderr.write(f"docs-check: cannot read {what} at {path}: {exc}\n")
+        raise SystemExit(2)
+
+
 def pyproject_prose(path: Path) -> str:
     """Only the fields a reader actually sees: description + keywords."""
-    with open(path, "rb") as fh:
-        data = tomllib.load(fh)
+    data = load_toml(path, "pyproject.toml")
     project = data.get("project", {})
     parts: List[str] = []
     if isinstance(project.get("description"), str):
@@ -648,14 +899,30 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if not cfg_path.exists():
         sys.stderr.write(f"docs-check: no config at {cfg_path}\n")
         return 2
-    with open(cfg_path, "rb") as fh:
-        config = tomllib.load(fh)
+    config = load_toml(cfg_path, "config")
 
     pkg_cfg = config.get("package", {})
-    import_name = pkg_cfg.get("import_name")
+    raw_import = pkg_cfg.get("import_name")
     readme_name = pkg_cfg.get("readme", "README.md")
-    if not import_name:
-        sys.stderr.write("docs-check: [package].import_name is required\n")
+
+    # Scalar or list -- a distribution may document more than one import path.
+    if isinstance(raw_import, str):
+        import_names = [raw_import]
+    elif isinstance(raw_import, list):
+        import_names = [x for x in raw_import if isinstance(x, str) and x]
+        if len(import_names) != len(raw_import):
+            sys.stderr.write(
+                "docs-check: [package].import_name list must contain only "
+                f"non-empty strings; got {raw_import!r}\n"
+            )
+            return 2
+    else:
+        import_names = []
+    if not import_names:
+        sys.stderr.write(
+            "docs-check: [package].import_name is required (a string, or a list "
+            "of strings when the distribution documents several import paths)\n"
+        )
         return 2
 
     readme_path = root / readme_name
@@ -673,15 +940,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     blocks = extract_blocks(readme)
 
     if args.list_blocks:
+        # The diagnostic the module docstring points at, so it has to show the
+        # things that actually go wrong: whether a marker was recognised (an
+        # unmarked block is a failure, and used to have its first line eaten)
+        # and how many lines would really execute.
         print(f"\n{len(blocks)} block(s) extracted:\n")
         for b in blocks:
-            info = f" info={b.info!r}" if b.style == "fenced" else ""
-            first = b.body[0] if b.body else ""
+            parse_marker(b)
+            if b.style == "fenced":
+                info = f" info={b.info!r}" if b.info else " info='' (BARE FENCE)"
+            else:
+                info = ""
+            marker = f"{b.action}" if b.action else "NONE (would FAIL)"
+            exec_lines = len([ln for ln in b.code.split("\n") if ln.strip()])
             print(f"  [{b.index}] {b.style:<8} line {b.line_no:<4}{info}")
-            print(f"       first line: {first[:70]!r}")
+            print(f"       marker    : {marker}"
+                  + (f" -> {b.argument!r}" if b.argument else ""))
+            print(f"       code lines: {exec_lines}")
+            print(f"       first line: {(b.body[0] if b.body else '')[:70]!r}")
         return 0
 
-    resolve_package(import_name, args.allow_source)
+    resolve_packages(import_names, args.allow_source)
     print()
 
     report = Report()
@@ -711,7 +990,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # Assertion 1
     check_block_outputs(root, config.get("expected", {}).get("dir", "docs/README.expected"), blocks, report)
     # Assertion 2
-    check_symbols(blocks, import_name, report)
+    check_symbols(blocks, import_names, report)
+    # Assertion 6 -- the package -> README direction
+    check_all_documented(
+        readme,
+        import_names,
+        report,
+        enabled=bool(pkg_cfg.get("require_all_documented", True)),
+    )
     # Assertion 3
     tests_cfg = config.get("tests", {})
     check_test_count(
