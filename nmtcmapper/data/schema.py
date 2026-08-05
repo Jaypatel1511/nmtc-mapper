@@ -100,8 +100,11 @@ DEEP_UNEMPLOYMENT_MULTIPLIER   = 2.5    # >= 2.5x national unemployment rate
 # eligibility file's NOTES sheet, row "Column L. Tract Unemployment to National
 # Unemployment Ratio": "the unemployment rate ratio is the ratio between the
 # census tract unemployment rate and the national unemployment rate, which is
-# 5.4 percent." Verified by exact arithmetic on the live file: column H divided
-# by column L equals 5.400000 for all 82,107 rows with a non-zero ratio.
+# 5.4 percent." Measured on the live file: column H divided by column L rounds to
+# 5.400000 at six decimal places for all 82,107 rows with a non-zero ratio
+# (observed 5.3999997 .. 5.4000003, largest deviation 3.1e-07). It is float
+# division of two published, rounded columns, so it is NOT bit-exact — 2,346 of
+# the 82,107 quotients equal 5.4 exactly.
 # 5.7% raised the bar on every unemployment-prong distress comparison.
 NATIONAL_UNEMPLOYMENT_RATE     = 0.054  # 5.4%
 
@@ -154,6 +157,20 @@ ELIGIBILITY_XLSB_COLUMN_COUNT = 16
 # Expected header string at each positionally-bound index the loader actually
 # reads (0,1,2,3,5,7,13,14,15). Matched after normalization (collapse internal
 # whitespace, casefold).
+#
+# THE AUTHORITATIVE SOURCE FOR EVERY STRING BELOW IS THE `2016-2020` DATA SHEET'S
+# HEADER ROW — never the NOTES sheet. The workbook disagrees with itself: the
+# NOTES sheet's "Column C." row spells it "...or RURAL HIGH MIGRATION Census
+# Tract?" while the data sheet, whose row-0 cells are the bytes the loader
+# actually compares against, reads "...or HIGH MIGRATION RURAL Census Tract?".
+# Normalization only collapses whitespace and case, so the swapped-word variant
+# is (correctly) rejected. A maintainer refreshing these pins from the NOTES
+# sheet would write a string that has never appeared in the data, and every live
+# load would fail with a header mismatch that looks like upstream drift. Read the
+# header row:
+#   with pyxlsb.open_workbook(path) as wb:
+#       with wb.get_sheet(ELIGIBILITY_XLSB_SHEET) as sheet:
+#           header = [c.v for c in next(iter(sheet.rows()))]
 ELIGIBILITY_XLSB_EXPECTED_HEADERS = {
     # Column 0 is the table's tract-basis declaration — read it from the ONE
     # binding, NOT a second literal, so the loader's header check and the

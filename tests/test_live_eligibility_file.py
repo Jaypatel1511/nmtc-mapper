@@ -39,19 +39,49 @@ def test_live_file_loads_and_has_the_full_universe(live_table):
 
 def test_live_eligible_count_reflects_the_widened_column_c(live_table):
     """July 2026 widened column C to carry High Migration Rural tracts, taking
-    the eligible count from 35,167 to 35,335 (+168). If this reads 35,167 the
-    Fund has reverted the widening and the CHANGELOG note for 0.4.2 is stale."""
+    the eligible count from 35,167 to 35,335 (+168).
+
+    Since 0.4.2 the verdict is column C OR column N, so this count no longer
+    depends on the widening: if the Fund separates the columns again it stays
+    35,335 and only the CHANGELOG's account of *where* the flag lives goes
+    stale. A reading of 35,167 here would mean the 168 had left column N too —
+    a genuine upstream eligibility change, not a reformatting."""
     assert int(live_table["nmtc_eligible"].sum()) == 35_335
 
 
 def test_live_high_migration_rural_tracts_are_all_lic(live_table):
     """The semantic content of the widening: all 1,422 High Migration Rural
     tracts are now flagged eligible in column C. Under Aug-2025b, 168 of them
-    were not — nmtc-mapper 0.4.1 reported those as NOT NMTC eligible, which
-    contradicted 26 USC 45D(e)(2) as implemented by AJCA 2004 sec. 223."""
+    were not — v0.3.1 through v0.4.1 reported those as NOT NMTC eligible, which
+    contradicted 26 U.S.C. 45D(e)(5), the paragraph AJCA 2004 sec. 223 added.
+
+    Since 0.4.2 the verdict is column C OR column N, so this assertion holds
+    whichever column the Fund publishes the flag in."""
     hmr = live_table[live_table["is_high_migration_rural"]]
     assert len(hmr) == 1_422
     assert bool(hmr["nmtc_eligible"].all())
+
+
+def test_live_column_n_is_an_lic_determination_not_county_membership(live_table):
+    """The premise the 0.4.2 verdict rests on: column N flags tracts that ARE
+    Low-Income Communities by way of a high migration rural county, not tracts
+    that merely sit in one. That is what makes `column C OR column N` safe.
+
+    If the Fund ever repurposed column N to mean bare county membership, OR-ing
+    it would start granting LIC status to tracts above 85% MFI — the mirror of
+    the defect 0.4.2 fixes. Every column-N tract must therefore satisfy a
+    statutory prong: poverty >= 20% (45D(e)(1)(A)), or MFI <= 85% (the
+    45D(e)(5) band, which subsumes the ordinary <= 80% test)."""
+    hmr = live_table[live_table["is_high_migration_rural"]]
+    assert len(hmr) == 1_422
+
+    qualifies = (hmr["poverty_rate"] >= 0.20) | (hmr["ami_ratio"] <= 0.85)
+    offenders = hmr[~qualifies]
+    assert offenders.empty, (
+        "column N flags tracts that meet no LIC prong — it is no longer an LIC "
+        f"determination and must not be OR-ed into the verdict: "
+        f"{offenders.index.tolist()[:10]}"
+    )
 
 
 def test_live_severe_and_deep_flags_match_the_corrected_thresholds(live_table):

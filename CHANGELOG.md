@@ -5,10 +5,56 @@ All notable changes to nmtc-mapper are documented here.
 ## [0.4.2] — 2026-08-05
 
 Hotfix. The CDFI Fund re-published the eligibility file in place; every live
-load had been failing. Also corrects three distress thresholds that disagreed
-with the CDFI Fund's own definitions.
+load had been failing. Corrects a shipped false negative on 168 census tracts,
+and three distress thresholds that disagreed with the CDFI Fund's own
+definitions.
 
 ### Fixed
+- **168 census tracts were reported as not NMTC-eligible when they were
+  eligible, in every release from v0.3.1 to v0.4.1.** This is the substantive
+  content of the release: a false negative in an eligibility tool.
+
+  A Low-Income Community is defined at 26 U.S.C. §45D(e). There are three routes
+  in: a poverty rate of 20% or more, a median family income at or below 80% of
+  the applicable area MFI, and — added by section 223 of the American Jobs
+  Creation Act of 2004 (P.L. 108-357), now **§45D(e)(5)** — a tract in a *high
+  migration rural county* with MFI at or below **85%** of the applicable area
+  MFI. A high migration rural county is one with net out-migration of at least
+  10% of its population over the 20 years ending with the most recent census.
+
+  The CDFI Fund's workbook published the first two routes in column C and the
+  third in column N. nmtc-mapper read **column C as the entire verdict** from
+  ccaab24 (v0.3.1, 2026-05-14 — the commit that added the `.xlsb` path) onward,
+  so the 168 tracts whose only route in is §45D(e)(5) came back
+  `nmtc_eligible=False`, `distress_level="ineligible"`, while the very same row
+  reported `is_high_migration_rural=True`. Six tagged releases carried it —
+  v0.3.1, v0.3.2, v0.3.3, v0.3.4, v0.4.0, v0.4.1 — from 2026-05-14 until this
+  release, 83 days.
+
+  **The verdict is now column C `OR` column N.** That is the Fund's own rule:
+  across all 85,395 rows of the live file, published column C is exactly
+  `column D OR column G OR column N` (the ≥20% poverty flag, the ≤80% MFI flag,
+  and the high-migration-rural LIC flag) with **zero mismatches**. Column N is an
+  LIC *determination*, not bare county membership — its 1,422 `YES` tracts sit in
+  437 counties holding 1,883 tracts between them, and every one of the 1,422
+  satisfies a statutory prong (757 on poverty, 1,084 on MFI ≤80%, and the
+  remaining 168 in the 80–85% band). If it had meant "sits in a high migration
+  rural county", OR-ing it would have granted LIC status to tracts above 85% MFI
+  — the mirror of the defect being fixed.
+
+  **On the file as published today this change moves nothing.** The July-2026
+  re-publish widened column C to absorb column N, so all 1,422 column-N `YES`
+  rows are already column-C `YES`: the eligible count is 35,335 with the OR and
+  35,335 without it, and the distress split is identical
+  (`ineligible` 50,060 / `lic` 14,153 / `severe` 13,121 / `deep` 8,061).
+  What changes is *why* it is right. Reading column C alone is correct only for
+  as long as the Fund keeps the columns merged, and nothing in the loader would
+  notice if they separated again: fed a file with the July-2026 headers and a
+  column C reverted to poverty/income only, the header pins match, the row-count
+  floor and value bounds pass, and the eligible count silently drops back to
+  35,167. `tests/test_schema_validation.py` now reproduces exactly that file
+  offline, so the gate runs in CI rather than only under `-m live`.
+
 - **Live data loads again.** On 2026-07-22 (per the URL's `last-modified`
   header; the file's NOTES sheet says "July 2026") the CDFI Fund re-published the
   eligibility workbook at the **same URL, under the same filename**
@@ -36,36 +82,72 @@ with the CDFI Fund's own definitions.
   weakened: the fresh file is checked just as strictly, a genuine divergence
   still raises, the retry happens at most once, and `force=True` never retries.
 
-### Changed — user-visible eligibility
-- **168 census tracts now return `nmtc_eligible=True` that returned `False` in
-  0.4.1.** This is a change in what the flag *asserts*, not a recomputation on
-  our side, and it is the substantive content of this release.
+- **A bad download can no longer destroy the cache.** `raise_for_status()` passes
+  on an HTTP 200, so an HTML maintenance page — the shape a CDN/origin stack in
+  front of this URL serves during an outage — used to stream cleanly to the
+  `.part` temp and then `tmp.replace()` straight over a good 4.8 MB workbook.
+  Worse, the resulting failure was an `EligibilityParseError`, which is a
+  *sibling* of `EligibilitySchemaError` rather than a subclass, so the stale-cache
+  self-heal above never caught it and never re-downloaded. Every subsequent run
+  read the 133 bytes of HTML from cache, failed, and attempted no download — with
+  a perfectly healthy network. The package stayed broken until the user found and
+  deleted `~/.nmtcmapper/cache` themselves, and the error message named the path
+  but offered no remedy.
 
-  Column C used to mean "qualifies as an LIC on the poverty or income criteria."
-  As of the July 2026 re-publish it also carries High Migration Rural tracts.
-  The file's own NOTES sheet states: *"In July 2026, the dataset was reformatted
-  to include High-Migration Rural Census Tracts under COLUMN C. Only formatting
-  changes were made. No eligibility changes were made."*
+  Two changes. The download now proves the body is an OOXML/ZIP container
+  (`PK\x03\x04`, plus a minimum size) **before** `tmp.replace()`, so a wrong body
+  never reaches the cache path at all — on a cold cache nothing is installed, and
+  on a warm one the existing file survives byte-for-byte. And the self-heal now
+  covers `EligibilityParseError` as well as `EligibilitySchemaError`, so a cache
+  already poisoned by an earlier release repairs itself on the next run. The
+  at-most-once cap is unchanged and remains structural: the handler calls the
+  private `_load_eligibility_table(force=True)`, not the public wrapper, so the
+  retry cannot re-enter the heal. A heal attempt that fails at the network layer
+  leaves the cached bytes exactly as it found them. The Opportunity Zone download
+  had the same `tmp.replace()` shape and now carries the same pre-replace guard.
+
+### Changed — user-visible eligibility
+- **Upstream widened column C, which is why 0.4.2 reads the 168 correctly even
+  before the fix above.** As of the July-2026 re-publish, column C also carries
+  High Migration Rural tracts. The file's own NOTES sheet states: *"In July 2026,
+  the dataset was reformatted to include High-Migration Rural Census Tracts under
+  COLUMN C. Only formatting changes were made. No eligibility changes were
+  made."*
 
   That last sentence is true of the **statute** and false of the **column**. A
   row-level diff of the two published files (all 85,395 tracts, every cell)
   shows exactly one column changed: **column C, 168 tracts, all `NO` → `YES`**.
   Columns A, B, D–P are byte-identical, including the severe and deep distress
   flags. All 168 are High Migration Rural, all are non-metro, none qualifies on
-  poverty (≥20%) or on MFI ≤80%, and every one has a benchmarked MFI ratio
-  between 0.8002 and 0.8499 — i.e. they qualify solely under the ≤85% AMI
-  provision that Section 223 of the American Jobs Creation Act of 2004
-  (P.L. 108-357) added to the LIC definition at 26 USC §45D(e).
+  poverty (≥20%) or on MFI ≤80%, and every one has a benchmarked MFI ratio in the
+  80–85% band — measured across the 168, from 0.800154 to 0.849885 — i.e. they
+  qualify solely under the ≤85% MFI provision at 26 USC §45D(e)(5).
 
-  So those tracts were **always** NMTC-eligible; the prior file simply expressed
-  it in column N instead of column C. nmtc-mapper read column C as the whole
-  verdict and ignored column N, so **0.4.1 and every earlier release reported
-  these 168 tracts as not NMTC-eligible when they were.** Upstream's widening
-  corrects a pre-existing under-report in this package.
+  Those tracts were **always** NMTC-eligible; the prior file simply expressed it
+  in column N. The Aug-2025b workbook said so outright, in a
+  `High migration tracts` sheet the re-publish dropped: it listed exactly these
+  168 tracts as "census tracts that have become eligible for NMTC investments
+  pursuant to the American Jobs Creation Act", above a 520-county table headed
+  *"High Migration Counties (only Low-Income Community census tracts within
+  counties are eligible)"*.
 
   Effect on the table: eligible tracts go 35,167 → **35,335**; ineligible
   50,228 → **50,060**. All 168 move `ineligible` → `lic`. No tract changes in
   the other direction, and no tract changes severe/deep status.
+
+  **Releases before v0.3.1 were not affected**, by accident rather than by
+  design. The retired `.xlsx` path ran `_compute_eligibility()`, whose `ami_lic`
+  term grants the ≤85% band to *every* non-metro tract rather than only to those
+  in high migration rural counties — so it returned eligible for all 168, and for
+  932 tracts in total that the Fund publishes as ineligible. A right answer from
+  an over-inclusive rule. **This is established at the code level and could not
+  be executed end-to-end:** the pre-v0.3.1 source URL now redirects to a 404 and
+  has no Wayback capture, so the `.xlsx` itself is unavailable. Executing the
+  v0.3.0 `_compute_eligibility()` verbatim against the 168 tracts' published
+  metrics returns eligible for 168 of 168 — but only on the assumption that the
+  retired workbook exposed a column that `ELIGIBILITY_FILE_COLUMNS` mapped to
+  `is_non_metro`. Without one, the same function returns eligible for 0 of 168,
+  and that assumption cannot now be checked.
 
 - **`DEEP_AMI_THRESHOLD` 0.50 → 0.40 and `DEEP_UNEMPLOYMENT_MULTIPLIER` 2.0 →
   2.5.** The shipped values were more permissive than the CDFI Fund's
@@ -80,10 +162,12 @@ with the CDFI Fund's own definitions.
 
 - **`NATIONAL_UNEMPLOYMENT_RATE` 0.057 → 0.054.** The Fund's NOTES sheet, row
   *"Column L"*: *"the ratio between the census tract unemployment rate and the
-  national unemployment rate, which is 5.4 percent."* Verified by exact
-  arithmetic on the live file — column H ÷ column L equals 5.400000 for all
-  82,107 rows with a non-zero ratio. 5.7% raised the bar on every
-  unemployment-prong distress comparison.
+  national unemployment rate, which is 5.4 percent."* Measured on the live file:
+  column H ÷ column L rounds to 5.400000 at six decimal places for all 82,107
+  rows with a non-zero ratio (observed range 5.3999997 to 5.4000003, largest
+  deviation 3.1e-07). This is float division of two published, rounded columns,
+  so it is not bit-exact — 2,346 of the 82,107 quotients equal 5.4 exactly. 5.7%
+  raised the bar on every unemployment-prong distress comparison.
 
   **Scope of the three constant fixes:** the live `.xlsb` path reads the Fund's
   pre-computed LIC / severe / deep flags and does not consult these constants,
@@ -103,14 +187,35 @@ with the CDFI Fund's own definitions.
   header means reading eligibility out of an unverified column.
 
 ### Notes
-- The re-published workbook also **drops the `High migration tracts` sheet**
-  present in the Aug-2025b release (3 sheets → 2). The loader reads only the
-  `2016-2020` sheet, so nothing breaks.
+- The re-published workbook **drops the `High migration tracts` sheet** present
+  in the Aug-2025b release (3 sheets → 2). The loader reads only the `2016-2020`
+  sheet, so nothing breaks — but that sheet was the file's only prose
+  explanation of the §45D(e)(5) route, and it held both the 168-tract list and
+  the 520-county high-migration list. The NOTES sheet's Column N entry still
+  ends *"A list of these qualifying census tracts is below"*, now pointing at a
+  sheet that no longer exists.
 - The Fund did **not** recompute columns O/P after widening column C. 20 tracts
   now satisfy the published severe-distress definition while being published
   `NO`, and 3 do so for deep distress — all of them among the 168. This package
   reports the Fund's published flags as-is and does not second-guess them; the
   discrepancy is pinned by a live test so it cannot grow unnoticed.
+- **The workbook's NOTES sheet and its data sheet disagree on the column-C
+  header.** NOTES spells it *"…or Rural High Migration Census Tract?"*; the data
+  sheet's own header row — the string the loader pins and compares against —
+  reads *"…or High Migration Rural Census Tract?"*. The data sheet is
+  authoritative; a note beside the pins in `schema.py` now says so, because
+  refreshing the pins from NOTES would produce a string that has never appeared
+  in the data and would fail every live load.
+- **Two tracts appear to be under-included upstream.** Presque Isle County, MI
+  (26141) is on the Fund's published high-migration county list and has three
+  column-N `YES` tracts, but tracts 26141950100 (MFI 0.8136) and 26141950500
+  (MFI 0.8416) sit inside the ≤85% band, qualify on no other prong, and are
+  published `NO` in both column C and column N — in the Aug-2025b file and in
+  the July-2026 re-publish alike. They are the only two such tracts in the
+  entire 520-county high-migration universe. This package reports the Fund's
+  published flags and does not add tracts the Fund omits, so nmtc-mapper returns
+  `nmtc_eligible=False` for both. Recorded here because it is the one place the
+  published data and the plain reading of §45D(e)(5) appear to diverge.
 
 ## [0.4.1] — 2026-07-17
 

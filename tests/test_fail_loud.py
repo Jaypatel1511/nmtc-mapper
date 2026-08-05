@@ -35,6 +35,37 @@ def _block_network(monkeypatch, exc=None):
     monkeypatch.setattr(loader.requests, "get", _boom)
 
 
+# A body with the right ZIP/OOXML magic but no readable workbook inside. Passes
+# the 0.4.2 pre-replace download guard (which only proves "this is a container,
+# not an HTML page") and fails at parse time — so it exercises the parse path
+# rather than the download path.
+CORRUPT_ZIP_BODY = b"PK\x03\x04" + b"\x00" * 6000
+HTML_ERROR_BODY = (
+    b"<!DOCTYPE html><html><head><title>Service Unavailable</title></head>"
+    b"<body><h1>Service Unavailable</h1></body></html>"
+)
+
+
+def _serve(monkeypatch, payload):
+    """Mock a healthy HTTP 200 that returns `payload`. Counts calls."""
+    calls = []
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, chunk_size=8192):
+            for i in range(0, len(payload), chunk_size):
+                yield payload[i:i + chunk_size]
+
+    def _get(*a, **k):
+        calls.append(1)
+        return _Resp()
+
+    monkeypatch.setattr(loader.requests, "get", _get)
+    return calls
+
+
 # ── Eligibility ───────────────────────────────────────────────────────────────
 
 def test_download_failure_raises(isolated_cache, monkeypatch):
@@ -49,19 +80,131 @@ def test_download_failure_mapper_constructor_raises(isolated_cache, monkeypatch)
         NMTCMapper()
 
 
-def test_corrupt_file_raises(isolated_cache):
+def test_corrupt_file_raises(isolated_cache, monkeypatch):
+    """A cached file that cannot be parsed raises — after exactly one self-heal
+    attempt (0.4.2). Here the fresh copy is corrupt too, so the problem is real
+    and must still surface as EligibilityParseError, not be retried forever."""
     (isolated_cache / ELIG_FILENAME).write_bytes(b"\x00\x01\x02 not a zip garbage")
+    calls = _serve(monkeypatch, CORRUPT_ZIP_BODY)
     with pytest.raises(EligibilityParseError):
         load_eligibility_table(force=False)
+    assert len(calls) == 1, "the parse self-heal must retry exactly once"
 
 
-def test_html_error_page_raises(isolated_cache):
-    # A 403/404 HTML error page saved under the .xlsb name (a real CDN failure mode).
+def test_html_error_page_raises(isolated_cache, monkeypatch):
+    # A 403/404 HTML error page saved under the .xlsb name (a real CDN failure
+    # mode). The heal re-downloads once; the origin is still serving HTML, so
+    # the pre-replace guard rejects the body before it can overwrite anything.
     (isolated_cache / ELIG_FILENAME).write_bytes(
         b"<!DOCTYPE html><html><body><h1>403 Forbidden</h1></body></html>"
     )
+    _serve(monkeypatch, HTML_ERROR_BODY)
+    with pytest.raises(EligibilityDownloadError) as ei:
+        load_eligibility_table(force=False)
+    assert "not an Excel workbook" in str(ei.value)
+
+
+# ── 0.4.2: an HTTP 200 carrying HTML must never reach the cache ───────────────
+#
+# raise_for_status() passes on a 200 and the stream writes fine, so before this
+# release an Akamai/Acquia-style maintenance page went straight through
+# tmp.replace(path) and destroyed a good 4.8 MB cache. EligibilityParseError is
+# a sibling of EligibilitySchemaError, not a subclass, so the self-heal never
+# caught the resulting failure and never re-downloaded: the package stayed
+# broken on every subsequent run, with a healthy network, until the user deleted
+# ~/.nmtcmapper/cache by hand.
+
+def test_html_200_does_not_replace_a_good_cache(isolated_cache, monkeypatch):
+    """The headline case. A good cached workbook must survive an HTTP-200 HTML
+    body byte-for-byte, and the failure must be a typed download error."""
+    cache = isolated_cache / ELIG_FILENAME
+    good = b"PK\x03\x04" + b"\xab" * 100_000
+    cache.write_bytes(good)
+
+    _serve(monkeypatch, HTML_ERROR_BODY)
+    with pytest.raises(EligibilityDownloadError) as ei:
+        loader.download_eligibility_file(force=True)
+
+    assert cache.read_bytes() == good, "HTML/200 destroyed the cached workbook"
+    assert "not an Excel workbook" in str(ei.value)
+    assert "has NOT been replaced" in str(ei.value)
+    assert list(isolated_cache.glob("*.part")) == [], ".part temp left behind"
+
+
+def test_html_200_on_a_cold_cache_installs_nothing(isolated_cache, monkeypatch):
+    """With no cache to protect, the wrong body must still not be installed —
+    otherwise the next run parse-fails on bytes it believes are the real file."""
+    _serve(monkeypatch, HTML_ERROR_BODY)
+    with pytest.raises(EligibilityDownloadError):
+        loader.download_eligibility_file(force=True)
+    assert not (isolated_cache / ELIG_FILENAME).exists()
+    assert list(isolated_cache.glob("*.part")) == []
+
+
+def test_poisoned_cache_heals_itself_once(isolated_cache, monkeypatch):
+    """A cache already poisoned by a pre-0.4.2 release must recover by itself as
+    soon as the origin is healthy — no manual `rm -rf` required.
+
+    The payload here is a container the download guard accepts but pyxlsb cannot
+    read, so the heal is driven by the parse path; the point under test is that
+    the poisoned bytes are discarded and re-fetched, not the parse outcome."""
+    cache = isolated_cache / ELIG_FILENAME
+    cache.write_bytes(HTML_ERROR_BODY)          # poisoned: 116 bytes of HTML
+    calls = _serve(monkeypatch, CORRUPT_ZIP_BODY)
+
     with pytest.raises(EligibilityParseError):
         load_eligibility_table(force=False)
+
+    assert len(calls) == 1, "poisoned cache never triggered a re-download"
+    assert cache.read_bytes() == CORRUPT_ZIP_BODY, \
+        "the poisoned bytes were not replaced by the fresh download"
+
+
+def test_parse_self_heal_does_not_loop(isolated_cache, monkeypatch):
+    """The one-retry cap is structural — the handler calls the private
+    _load_eligibility_table(force=True), not the public wrapper, so the retry
+    cannot re-enter the heal. Two downloads here would mean it had."""
+    (isolated_cache / ELIG_FILENAME).write_bytes(b"garbage, not a workbook")
+    calls = _serve(monkeypatch, CORRUPT_ZIP_BODY)
+    with pytest.raises(EligibilityParseError):
+        load_eligibility_table(force=False)
+    assert len(calls) == 1
+
+
+def test_parse_self_heal_does_not_fire_without_a_cache(isolated_cache, monkeypatch):
+    """force=True already fetched fresh bytes, so a failure there is real and
+    must not be retried."""
+    calls = _serve(monkeypatch, CORRUPT_ZIP_BODY)
+    with pytest.raises(EligibilityParseError):
+        load_eligibility_table(force=True)
+    assert len(calls) == 1, "force=True must not trigger a second download"
+
+
+def test_failed_heal_preserves_the_cached_bytes(isolated_cache, monkeypatch):
+    """A heal attempt that fails at the network layer must leave the cache
+    exactly as it found it — a superseded file still beats no file."""
+    cache = isolated_cache / ELIG_FILENAME
+    superseded = b"PK\x03\x04" + b"\xcd" * 50_000
+    cache.write_bytes(superseded)
+    _block_network(monkeypatch)
+    with pytest.raises(EligibilityDownloadError):
+        load_eligibility_table(force=False)
+    assert cache.read_bytes() == superseded
+    assert list(isolated_cache.glob("*.part")) == []
+
+
+def test_oz_html_200_does_not_replace_a_good_cache(isolated_cache, monkeypatch):
+    """The OZ download has the same tmp.replace() shape and no self-heal at all,
+    so poisoning it would be permanent. Nothing unvalidated may land there."""
+    cache = isolated_cache / OZ_FILENAME
+    good = b"PK\x03\x04" + b"\xef" * 100_000
+    cache.write_bytes(good)
+    _serve(monkeypatch, HTML_ERROR_BODY)
+    with pytest.raises(OZDownloadError) as ei:
+        load_opportunity_zones(force=True)
+    assert cache.read_bytes() == good
+    assert "not an Excel workbook" in str(ei.value)
+    assert list(isolated_cache.glob("*.part")) == []
 
 
 def test_old_sample_on_failure_now_raises(isolated_cache, monkeypatch):
@@ -113,7 +256,9 @@ def test_partial_download_cleanup_and_retry(isolated_cache, monkeypatch):
 
     # Second attempt: the mock now succeeds. force=False proves no poisoned
     # cache short-circuits the retry — the loader must actually re-download.
-    payload = b"FULL_CONTENT" * 100
+    # The payload carries ZIP/OOXML magic and clears the minimum size, because
+    # since 0.4.2 the download refuses to install a body that is not a workbook.
+    payload = b"PK\x03\x04" + b"FULL_CONTENT" * 500
     calls = []
 
     class _GoodResponse:

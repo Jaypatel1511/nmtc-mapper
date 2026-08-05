@@ -110,9 +110,19 @@ stamps the mapper so you can tell demo answers from real ones:
 
 A census tract qualifies as a Low-Income Community (LIC) if it meets ANY of:
 
-- Poverty rate >= 20%
-- Median Family Income <= 80% of metro/state AMI
-- Median Family Income <= 85% of state AMI (high migration rural counties)
+- Poverty rate >= 20%  — 26 U.S.C. §45D(e)(1)(A)
+- Median Family Income <= 80% of metro/state AMI  — §45D(e)(1)(B)
+- Median Family Income <= 85% of the applicable area AMI, for a tract in a
+  **high migration rural county** — §45D(e)(5), added by section 223 of the
+  American Jobs Creation Act of 2004. A high migration rural county is one with
+  net out-migration of at least 10% of its population over the 20 years ending
+  with the most recent census. 1,422 tracts carry this designation and 168 of
+  them qualify on this route alone.
+
+The CDFI Fund publishes the first two routes in the file's column C and the
+third in column N, and has moved the boundary between those columns once (July
+2026). nmtc-mapper reads the verdict as **C or N**, so it does not depend on
+where the Fund currently draws it.
 
 Distress levels:
 
@@ -191,10 +201,10 @@ deferred to 0.5.0 — see the CHANGELOG.
     # docs-check: skip shell command; the suite is run by CI, not by this gate
     PYTHONPATH=. pytest tests/ -v
 
-127 tests across all modules (including fail-loud, explicit-sample-mode,
-tri-state eligibility, async-batch, and schema-drift coverage). 8 of these are
-`@live` tests that hit the real CDFI Fund / Census endpoints; CI deselects them
-with `-m "not live"`, leaving 119 offline.
+140 tests across all modules (including fail-loud, explicit-sample-mode,
+tri-state eligibility, async-batch, cache-poisoning and schema-drift coverage).
+9 of these are `@live` tests that hit the real CDFI Fund / Census endpoints; CI
+deselects them with `-m "not live"`, leaving 131 offline.
 
 ---
 

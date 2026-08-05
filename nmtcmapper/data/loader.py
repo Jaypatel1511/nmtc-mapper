@@ -126,6 +126,42 @@ def _eligibility_cache_path() -> Path:
     return _cache_path(ELIGIBILITY_CACHE_FILENAME)
 
 
+# Both workbooks this package downloads (.xlsb and .xlsx) are OOXML, i.e. ZIP
+# containers, so every legitimate body starts with the ZIP local-file-header
+# magic. An HTML page does not.
+_ZIP_MAGIC = b"PK\x03\x04"
+
+# Small floor purely against a zero-length or stub body that happened to start
+# with the magic. The real content check is the header/row-count validation
+# downstream; this is only about never installing obvious garbage as the cache.
+_MIN_WORKBOOK_BYTES = 4096
+
+
+def _validated_workbook_bytes(tmp: Path, url: str) -> None:
+    """Raise if `tmp` is not plausibly a workbook. Call BEFORE tmp.replace(path).
+
+    An HTTP 200 carrying an HTML body is the shape a CDN/origin stack serves
+    during maintenance, and ``raise_for_status()`` is blind to it: the status is
+    200, the stream writes fine, and before 0.4.2 the HTML went straight to
+    ``tmp.replace(path)`` and destroyed a good 4.8 MB cache. Every later run then
+    served those bytes from cache, failed to parse them, and never re-downloaded
+    — the package stayed broken until the user found and deleted the cache
+    directory by hand. The download must therefore prove the body is a workbook
+    before it is allowed anywhere near the cache path.
+    """
+    size = tmp.stat().st_size if tmp.exists() else 0
+    head = tmp.read_bytes()[:len(_ZIP_MAGIC)] if size else b""
+    if head != _ZIP_MAGIC or size < _MIN_WORKBOOK_BYTES:
+        preview = tmp.read_bytes()[:80] if size else b""
+        raise EligibilityDownloadError(
+            f"Download from {url} returned {size:,} bytes that are not an "
+            f"Excel workbook (expected a ZIP/OOXML container starting "
+            f"{_ZIP_MAGIC!r}, got {head!r}). This is the signature of an HTTP 200 "
+            f"carrying an error or maintenance page rather than the file. "
+            f"The cached copy has NOT been replaced. First bytes: {preview!r}"
+        )
+
+
 def download_eligibility_file(force: bool = False) -> Path:
     path = _eligibility_cache_path()
     if path.exists() and not force:
@@ -142,6 +178,13 @@ def download_eligibility_file(force: bool = False) -> Path:
         with open(tmp, "wb") as f:
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
+        # Nothing unvalidated may reach the cache path: replacing a good 4.8 MB
+        # workbook with an HTML maintenance page is not recoverable from here.
+        try:
+            _validated_workbook_bytes(tmp, CDFI_FUND_LIC_URL_2020)
+        except EligibilityDownloadError:
+            tmp.unlink(missing_ok=True)
+            raise
         tmp.replace(path)
         print(f"Saved to {path}")
         return path
@@ -179,18 +222,39 @@ def load_eligibility_table(force: bool = False) -> pd.DataFrame:
     as strictly, and a genuine upstream divergence still raises (once, not in a
     loop). An explicit force=True already fetched fresh bytes, so it never
     retries.
+
+    The self-heal covers an UNREADABLE cached file as well as a stale-layout one.
+    EligibilityParseError is a sibling of EligibilitySchemaError, not a subclass,
+    so catching only the latter left a cached file that cannot be parsed at all
+    outside the heal: it raised on every run and never triggered a re-download,
+    and the user stayed broken until they deleted ~/.nmtcmapper/cache by hand.
+    That is exactly the state a truncated write or (before this release) an
+    HTTP-200 HTML body left behind, and the cache is the one thing the package
+    can fix for itself. Both are caught on a CACHED file only, and both still
+    retry at most once.
+
+    The at-most-once property is structural, not a counter: the handler calls the
+    private ``_load_eligibility_table(force=True)``, not this wrapper, so the
+    retry cannot itself re-enter the heal.
     """
     served_from_cache = (not force) and _eligibility_cache_path().exists()
     try:
         return _load_eligibility_table(force=force)
-    except EligibilitySchemaError:
+    except (EligibilitySchemaError, EligibilityParseError) as e:
         if not served_from_cache:
             raise
-        print(
-            "Cached eligibility file does not match the expected CDFI Fund "
-            "layout. The Fund re-publishes in place, so the cached copy may be "
-            "superseded — re-downloading once and re-validating..."
-        )
+        if isinstance(e, EligibilitySchemaError):
+            print(
+                "Cached eligibility file does not match the expected CDFI Fund "
+                "layout. The Fund re-publishes in place, so the cached copy may "
+                "be superseded — re-downloading once and re-validating..."
+            )
+        else:
+            print(
+                "Cached eligibility file could not be read at all — the cached "
+                "bytes are corrupt or are not a workbook. Discarding them and "
+                "re-downloading once..."
+            )
         return _load_eligibility_table(force=True)
 
 
@@ -219,17 +283,62 @@ def _load_eligibility_table(force: bool = False) -> pd.DataFrame:
     except Exception as e:
         raise EligibilityParseError(
             f"Failed to parse eligibility file {path}: {type(e).__name__}: {e}"
+            f"\n\nThose bytes are not a readable workbook. If they came from the "
+            f"cache, a fresh download has already been attempted automatically "
+            f"and the file still would not parse, so the problem is upstream or "
+            f"on the network path — not a stale cache. You can delete "
+            f"{path.parent} to start clean; nothing in it is user data."
         ) from e
 
 
 def _load_xlsb_table(path: Path) -> pd.DataFrame:
-    """Parse the Aug 2025 CDFI Fund .xlsb file.
+    """Parse the CDFI Fund .xlsb file (Aug-2025b layout, July-2026 re-publish).
 
-    Column layout (0-indexed) confirmed from the Aug-2025b release:
+    Column layout (0-indexed), confirmed against the live file:
       0  GEOID, 1 Metro/Non-metro, 2 LIC eligible (YES/NO),
       3  Poverty rate %, 5 MFI ratio (decimal), 7 Unemployment rate %,
-     13  High migration (YES/NO), 14 Severe distress (YES/NO),
+     13  High Migration Rural County LIC (YES/NO), 14 Severe distress (YES/NO),
      15  Deep distress (YES/NO)
+
+    THE LIC VERDICT IS COLUMN 2 **OR** COLUMN 13 (0.4.2).
+    ------------------------------------------------------------------
+    Through 0.4.1 the verdict was column 2 alone. That under-reported 168 tracts
+    for the whole life of the .xlsb path (v0.3.1 .. v0.4.1): under the Aug-2025b
+    layout, column 2 carried only the poverty and <=80%-MFI criteria, and the
+    third statutory LIC route — a tract in a high migration rural county with MFI
+    at or below 85% of the applicable area MFI, 26 U.S.C. 45D(e)(5), added by
+    section 223 of the American Jobs Creation Act of 2004 (P.L. 108-357) — was
+    published only in column 13. The July-2026 re-publish widened column 2 to
+    absorb column 13, which is why 0.4.2 reads correctly from column 2 alone.
+    That is upstream's choice, not a property of this package, and nothing in the
+    loader would detect the Fund separating the two columns again: the header
+    guard, the row-count floor and the value bounds all pass on such a file and
+    the 168 silently go back to "ineligible". OR-ing column 13 in makes the
+    verdict follow the statute rather than upstream's current formatting.
+
+    Column 13 is an LIC DETERMINATION, not bare county membership. Establishing
+    that is what makes the OR safe: if column 13 meant only "sits in a high
+    migration rural county", OR-ing it would grant LIC to HMR tracts whose MFI
+    exceeds 85% — the mirror of the defect being fixed. Three independent checks
+    on the live file say it is a determination:
+      * Its 1,422 YES tracts sit in 437 counties that together hold 1,883 tracts.
+        The other 461 are column-13 NO, so the flag is a strict subset of county
+        membership. None of those 461 reaches 20% poverty and only 2 fall in the
+        <=85% band (see below).
+      * Every one of the 1,422 satisfies a statutory LIC prong: 757 on poverty
+        >=20%, 1,084 on MFI <=80%, and the remaining 168 in the (80%, 85%] band
+        that 45D(e)(5) opens. Zero fail all prongs.
+      * The Fund's own widened column 2 is exactly `col4 OR col6 OR col13`
+        (poverty flag, MFI<=80% flag, this column) with zero mismatches across
+        all 85,395 rows. OR-ing column 13 reproduces the Fund's own rule.
+    The Aug-2025b workbook, whose extra "High migration tracts" sheet the
+    re-publish dropped, states the same in prose: its county sub-table is headed
+    "High Migration Counties (only Low-Income Community census tracts within
+    counties are eligible)", and its tract sub-table lists exactly the 168.
+
+    On the live July-2026 file this OR is a NO-OP: all 1,422 column-13 YES rows
+    are already column-2 YES, so the eligible count is 35,335 with and without
+    it. It is a floor under the verdict, not a change to it.
     """
     try:
         import pyxlsb
@@ -257,13 +366,18 @@ def _load_xlsb_table(path: Path) -> pd.DataFrame:
 
                 geoid        = str(vals[0]).strip().zfill(11)
                 non_metro    = str(vals[1]).strip().upper() != "METRO"
-                lic_elig     = str(vals[2]).strip().upper() == "YES"
                 poverty_rate = (_num(vals[3]) / 100) if _num(vals[3]) is not None else None
                 ami_ratio    = _num(vals[5])
                 unemp_rate   = (_num(vals[7]) / 100) if _num(vals[7]) is not None else None
                 high_migr    = str(vals[13]).strip().upper() == "YES"
                 severe       = str(vals[14]).strip().upper() == "YES"
                 deep         = str(vals[15]).strip().upper() == "YES"
+
+                # The LIC verdict is column C **OR** column N, never column C
+                # alone. See the block comment above _load_xlsb_table for why
+                # column N is an LIC determination and not bare "in a high
+                # migration rural county", and why this is a no-op today.
+                lic_elig     = (str(vals[2]).strip().upper() == "YES") or high_migr
 
                 # Value plausibility (Fix 6) — on the STORED value; None passes.
                 _check_value_bounds("poverty_rate", poverty_rate, i)
@@ -450,6 +564,15 @@ def load_opportunity_zones(force: bool = False) -> set:
             with open(tmp, "wb") as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
+            # Same pre-replace guard as the eligibility download: an HTTP-200
+            # HTML body must never overwrite a good cached workbook. (The OZ
+            # path has no self-heal, so poisoning here would be permanent —
+            # which is why nothing unvalidated may reach tmp.replace().)
+            try:
+                _validated_workbook_bytes(tmp, OZ_URL_2018)
+            except EligibilityDownloadError as e:
+                tmp.unlink(missing_ok=True)
+                raise OZDownloadError(str(e)) from e
             tmp.replace(path)
             print(f"Saved to {path}")
         except requests.exceptions.HTTPError as e:

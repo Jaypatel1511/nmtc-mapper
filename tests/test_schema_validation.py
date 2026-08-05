@@ -314,10 +314,11 @@ def test_deep_and_severe_constants_agree_with_pinned_header_definitions():
 
 def test_national_unemployment_rate_matches_cdfi_fund_notes():
     """The file's NOTES sheet, Column L: 'the national unemployment rate, which
-    is 5.4 percent.' Verified independently by exact arithmetic over the live
-    file: col H / col L == 5.400000 for all 82,107 rows with a non-zero ratio.
-    0.4.1 shipped 5.7%, which raised the unemployment bar on every distress
-    comparison."""
+    is 5.4 percent.' Corroborated by measurement over the live file: col H / col
+    L rounds to 5.400000 at six decimal places for all 82,107 rows with a
+    non-zero ratio (largest deviation 3.1e-07 — float division of two published,
+    rounded columns, so not bit-exact). 0.4.1 shipped 5.7%, which raised the
+    unemployment bar on every distress comparison."""
     assert NATIONAL_UNEMPLOYMENT_RATE == 0.054
 
 
@@ -407,3 +408,114 @@ def test_explicit_force_does_not_retry(monkeypatch, tmp_path):
     with pytest.raises(EligibilitySchemaError):
         loader.load_eligibility_table(force=True)
     assert state["downloads"] == 1          # the caller's own forced download only
+
+
+# ── 0.4.2: the verdict is column C OR column N, offline ──────────────────────
+#
+# 0.4.2 exists because 168 high-migration-rural tracts were reported not
+# NMTC-eligible. The published fix reads them correctly ONLY because the CDFI
+# Fund happened to widen column C in the July-2026 re-publish. Column N is
+# parsed and surfaced but was excluded from the verdict, so the Fund separating
+# the two columns again — while keeping the July-2026 header strings — would
+# silently restore the defect: the header guard matches, the row-count floor and
+# the value bounds pass, and the 168 go back to nmtc_eligible=False while still
+# reporting is_high_migration_rural=True.
+#
+# The @live module can only see that on the file the Fund publishes TODAY, and
+# no CI job runs `-m live`. These tests reproduce the reversion offline, so the
+# gate exists where CI can see it.
+#
+# Fixture rows mirror real tracts from the 168 (verified against the live file):
+#   01013953500 Butler County AL — Non-metro, poverty 15.0%, MFI 0.8377
+#   01035960400 Conecuh County AL — Non-metro, poverty  7.0%, MFI 0.8175
+# Both sit in the (80%, 85%] MFI band that 26 U.S.C. 45D(e)(5) opens to tracts
+# in high migration rural counties, and neither qualifies on poverty or on the
+# ordinary <=80% MFI test. Column N is the only place their LIC status lived
+# before July 2026.
+
+# Column C as the Fund published it under Aug-2025b: poverty/income criteria
+# only, high-migration-rural tracts carried in column N alone.
+HMR_ONLY_A = make_row("01013953500", metro="Non-metro", lic="NO",
+                      poverty=15.0, mfi=0.837746360750015, unemp=2.9,
+                      highmig="YES")
+HMR_ONLY_B = make_row("01035960400", metro="Non-metro", lic="NO",
+                      poverty=7.0, mfi=0.8174534235907267, unemp=7.5,
+                      highmig="YES")
+# The same two tracts as the July-2026 file publishes them: column C widened to
+# absorb column N, so both columns say YES.
+HMR_WIDENED_A = make_row("01013953500", metro="Non-metro", lic="YES",
+                         poverty=15.0, mfi=0.837746360750015, unemp=2.9,
+                         highmig="YES")
+HMR_WIDENED_B = make_row("01035960400", metro="Non-metro", lic="YES",
+                         poverty=7.0, mfi=0.8174534235907267, unemp=7.5,
+                         highmig="YES")
+
+
+def test_column_n_alone_still_yields_eligible_when_column_c_reverts(monkeypatch):
+    """THE reversion gate. Column C carries poverty/income only — as it did
+    through v0.4.1 — while the July-2026 headers are unchanged. Both tracts must
+    still come back NMTC-eligible, because column N says they are LICs.
+
+    Without the column-N term in the verdict this test fails: both report
+    nmtc_eligible=False and distress_level='ineligible' while
+    is_high_migration_rural stays True, which is exactly the shipped defect."""
+    rows = [LIVE_HEADER, HMR_ONLY_A, HMR_ONLY_B] + _padding(1200)
+    df = _load(monkeypatch, rows)                     # no guard may fire
+
+    for tid in ("01013953500", "01035960400"):
+        r = df.loc[tid]
+        assert r["nmtc_eligible"] == True, tid
+        assert r["distress_level"] == "lic", tid
+        assert r["is_high_migration_rural"] == True, tid
+
+
+def test_reverted_column_c_does_not_change_the_eligible_count(monkeypatch):
+    """The count, not just the two rows: separating the columns again must move
+    no verdict at all. This is the population-level form of the same gate."""
+    padding = _padding(1200)
+    widened = _load(monkeypatch, [LIVE_HEADER, HMR_WIDENED_A, HMR_WIDENED_B] + padding)
+    reverted = _load(monkeypatch, [LIVE_HEADER, HMR_ONLY_A, HMR_ONLY_B] + padding)
+
+    assert int(reverted["nmtc_eligible"].sum()) == int(widened["nmtc_eligible"].sum())
+    assert (reverted["distress_level"].value_counts().to_dict()
+            == widened["distress_level"].value_counts().to_dict())
+
+
+def test_no_other_guard_catches_the_reversion(monkeypatch):
+    """Why this test module has to carry the gate: on a reverted file the header
+    validation, the row-count floor and the value bounds all pass. Nothing else
+    in the loader is looking, so if the verdict does not read column N the
+    regression is silent."""
+    rows = [LIVE_HEADER, HMR_ONLY_A, HMR_ONLY_B] + _padding(1200)
+    df = _load(monkeypatch, rows)                     # would have raised otherwise
+    assert len(df) == 1202
+    for idx, expected in ELIGIBILITY_XLSB_EXPECTED_HEADERS.items():
+        assert rows[0][idx] == expected               # pins genuinely unchanged
+
+
+def test_column_n_no_does_not_grant_eligibility(monkeypatch):
+    """The OR must not over-grant. A tract that is column-C NO and column-N NO
+    stays ineligible — including one inside the (80%, 85%] MFI band, which is
+    only an LIC route for tracts in a high migration rural county. If the verdict
+    ever keyed off bare high-migration-rural status, or off the 85% band alone,
+    this row would flip and this test would catch it."""
+    band_but_not_hmr = make_row("26141950500", metro="Non-metro", lic="NO",
+                                poverty=14.3, mfi=0.8415264343447728, unemp=3.0,
+                                highmig="NO")
+    rows = [LIVE_HEADER, band_but_not_hmr] + _padding(1200)
+    df = _load(monkeypatch, rows)
+    r = df.loc["26141950500"]
+    assert r["nmtc_eligible"] == False
+    assert r["distress_level"] == "ineligible"
+
+
+def test_the_or_is_a_no_op_on_the_file_as_published(monkeypatch):
+    """On the July-2026 layout every column-N YES row is already column-C YES,
+    so the OR changes nothing — it is a floor under the verdict, not a new
+    source of eligibility."""
+    rows = [LIVE_HEADER, HMR_WIDENED_A, HMR_WIDENED_B, PIN_INELIGIBLE] + _padding(1200)
+    df = _load(monkeypatch, rows)
+    hmr = df[df["is_high_migration_rural"]]
+    assert bool(hmr["nmtc_eligible"].all())
+    # the OR adds nobody outside the column-N set
+    assert df.loc["17031030604"]["nmtc_eligible"] == False
