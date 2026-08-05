@@ -74,12 +74,36 @@ SEVERE_AMI_THRESHOLD           = 0.60   # <= 60% of AMI
 SEVERE_UNEMPLOYMENT_MULTIPLIER = 1.5    # >= 1.5x national unemployment rate
 
 # Deep Distress thresholds
-DEEP_POVERTY_THRESHOLD         = 0.40   # >= 40% poverty rate
-DEEP_AMI_THRESHOLD             = 0.50   # <= 50% of AMI
-DEEP_UNEMPLOYMENT_MULTIPLIER   = 2.0    # >= 2x national unemployment rate
+#
+# CORRECTED IN 0.4.2. 0.4.1 shipped DEEP_AMI_THRESHOLD = 0.50 and
+# DEEP_UNEMPLOYMENT_MULTIPLIER = 2.0, which are MORE PERMISSIVE than the CDFI
+# Fund's own definition and would classify tracts as deeply distressed that the
+# Fund does not. Authority, in order of directness:
+#   1. The eligibility file's NOTES sheet, row "Column P. Deep Distress":
+#      "Deep distress=LIC AND (Poverty>40%; MFI<=40%;Unemployment>=2.5)"
+#   2. The same string as the column-15 header on the data sheet (pinned in
+#      ELIGIBILITY_XLSB_EXPECTED_HEADERS[15] since 0.4.0 — the package was
+#      already carrying the correct definition in one place and the wrong one
+#      in another).
+#   3. Empirical: LIC AND (poverty>40 OR mfi<=0.40 OR unemp_ratio>=2.5)
+#      reproduces the published column-15 flag with ZERO mismatches across all
+#      85,395 rows. The 0.4.1 pair (0.50 / 2.0) misses by 5,015 rows.
+# Note the criteria are OR-ed with each other and AND-ed with LIC — the header's
+# semicolons read as "or", confirmed by the same zero-mismatch fit.
+DEEP_POVERTY_THRESHOLD         = 0.40   # > 40% poverty rate
+DEEP_AMI_THRESHOLD             = 0.40   # <= 40% of AMI
+DEEP_UNEMPLOYMENT_MULTIPLIER   = 2.5    # >= 2.5x national unemployment rate
 
-# National unemployment rate benchmark (2016-2020 ACS)
-NATIONAL_UNEMPLOYMENT_RATE     = 0.057  # 5.7%
+# National unemployment rate benchmark (2016-2020 ACS).
+#
+# CORRECTED IN 0.4.2: 0.4.1 shipped 0.057. The CDFI Fund uses 5.4%, per the
+# eligibility file's NOTES sheet, row "Column L. Tract Unemployment to National
+# Unemployment Ratio": "the unemployment rate ratio is the ratio between the
+# census tract unemployment rate and the national unemployment rate, which is
+# 5.4 percent." Verified by exact arithmetic on the live file: column H divided
+# by column L equals 5.400000 for all 82,107 rows with a non-zero ratio.
+# 5.7% raised the bar on every unemployment-prong distress comparison.
+NATIONAL_UNEMPLOYMENT_RATE     = 0.054  # 5.4%
 
 # ── CDFI Fund Eligibility File Column Mappings ────────────────────────────────
 # Source: 2016-2020 ACS Low-Income Community Eligibility file from cdfifund.gov
@@ -136,11 +160,22 @@ ELIGIBILITY_XLSB_EXPECTED_HEADERS = {
     # geocoder vintage cannot desync (0.4.1).
     0:  TRACT_VINTAGE.table_geoid_header,
     1:  "OMB Metro/Non-metro Designation, March 2020 (OMB Bulletin No. 20-01)",
-    2:  "Does Census Tract Qualify For NMTC Low-Income Community (LIC) on Poverty or Income Criteria?",
+    # 0.4.2: the CDFI Fund re-published at the SAME URL in July 2026 and WIDENED
+    # this column. It now flags High Migration Rural tracts (LIC via <=85% AMI
+    # under AJCA 2004 §223) in addition to the poverty/income criteria. The
+    # file's own NOTES sheet: "In July 2026, the dataset was reformatted to
+    # include High-Migration Rural Census Tracts under COLUMN C. Only formatting
+    # changes were made. No eligibility changes were made." That last sentence is
+    # true of the STATUTE — those tracts were always LICs — but not of this
+    # column: 168 tracts flipped NO->YES here, so `nmtc_eligible` now returns
+    # True for 168 tracts where 0.4.1 returned False. See CHANGELOG 0.4.2.
+    2:  "Does Census Tract Qualify For NMTC Low-Income Community (LIC) on Poverty or Income Criteria or High Migration Rural Census Tract?",
     3:  "Census Tract Poverty Rate % (2016-2020 ACS)",
     5:  "Census Tract Percent of Benchmarked Median Family Income (%) 2016-2020 ACS",
     7:  "Census Tract Unemployment Rate (%) 2016-2020",
-    13: "High Migration County Low-Income Community Census Tract",
+    # 0.4.2: "Rural" inserted in the July-2026 re-publish. Cosmetic — the column's
+    # 1,422 YES values are byte-identical to the Aug-2025b release.
+    13: "High Migration Rural County Low-Income Community Census Tract",
     14: "Severe distress=LIC AND (Poverty>30%; MFI<=60%;Unemployment>=1.5)",
     15: "Deep distress=LIC AND (Poverty>40%; MFI<=40%;Unemployment>=2.5)",
 }

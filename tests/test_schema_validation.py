@@ -4,7 +4,8 @@ The live .xlsb path binds columns POSITIONALLY and skips the header blind, so a
 re-ordered/renamed column or a degenerate parse is read silently against the
 wrong fields. These tests drive a MOCKED pyxlsb workbook so they run offline.
 
-FIXTURE REALISM IS LOAD-BEARING — this fixture mirrors the real Aug-2025b file:
+FIXTURE REALISM IS LOAD-BEARING — this fixture mirrors the real live file (the
+July-2026 re-publish of the Aug-2025b release, at the same URL):
   * exactly 16 columns, with the real header strings (verified live);
   * poverty & unemployment stored as PERCENTS (19.7, 1.7) — the loader /100s them;
   * ami_ratio (col 5) stored as a FRACTION (0.9127...) even though its header
@@ -13,6 +14,7 @@ The magnitudes must NOT be "simplified"/normalized: a fixture that stored ami as
 91.27 or poverty as 0.197 would keep this suite green over exactly the scale-flip
 bug Fix 6 exists to catch (the "green over a fabricated grade" failure mode).
 """
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -20,13 +22,24 @@ import pytest
 
 import nmtcmapper.data.loader as loader
 from nmtcmapper.data.loader import _load_xlsb_table
+from nmtcmapper.data.schema import (
+    ELIGIBILITY_XLSB_EXPECTED_HEADERS,
+    SEVERE_POVERTY_THRESHOLD, SEVERE_AMI_THRESHOLD,
+    SEVERE_UNEMPLOYMENT_MULTIPLIER,
+    DEEP_POVERTY_THRESHOLD, DEEP_AMI_THRESHOLD,
+    DEEP_UNEMPLOYMENT_MULTIPLIER,
+    NATIONAL_UNEMPLOYMENT_RATE,
+)
 from nmtcmapper.exceptions import EligibilitySchemaError, EligibilityValueError
 
-# The real 16-column header row, verified against the live file.
+# The real 16-column header row, verified against the live file (July-2026
+# re-publish). Indices 2 and 13 were renamed by the CDFI Fund in place; the
+# superseded Aug-2025b strings are kept below as SUPERSEDED_HEADER_2025B so the
+# suite can prove the pin MOVED rather than widened to accept both.
 LIVE_HEADER = [
     "2020 Census Tract Number FIPS code. GEOID",
     "OMB Metro/Non-metro Designation, March 2020 (OMB Bulletin No. 20-01)",
-    "Does Census Tract Qualify For NMTC Low-Income Community (LIC) on Poverty or Income Criteria?",
+    "Does Census Tract Qualify For NMTC Low-Income Community (LIC) on Poverty or Income Criteria or High Migration Rural Census Tract?",
     "Census Tract Poverty Rate % (2016-2020 ACS)",
     "Does Census Tract Qualify on Poverty Criteria>=20%?",
     "Census Tract Percent of Benchmarked Median Family Income (%) 2016-2020 ACS",
@@ -37,10 +50,18 @@ LIVE_HEADER = [
     "County Name",
     "Census Tract Unemployment to National Unemployment Ratio ",
     "Population for whom poverty status is determined 2016-2020 ACS",
-    "High Migration County Low-Income Community Census Tract",
+    "High Migration Rural County Low-Income Community Census Tract",
     "Severe distress=LIC AND (Poverty>30%; MFI<=60%;Unemployment>=1.5)",
     "Deep distress=LIC AND (Poverty>40%; MFI<=40%;Unemployment>=2.5)",
 ]
+
+# The two header strings as published in the Aug-2025b release, superseded by
+# the July-2026 re-publish at the SAME URL. Pinned here so a regression that
+# reverted the constants would fail loudly instead of silently.
+SUPERSEDED_HEADER_2025B = {
+    2:  "Does Census Tract Qualify For NMTC Low-Income Community (LIC) on Poverty or Income Criteria?",
+    13: "High Migration County Low-Income Community Census Tract",
+}
 
 
 def make_row(geoid, *, metro="Metro", lic="NO", poverty=13.7, mfi=0.9,
@@ -236,3 +257,153 @@ def test_na_cells_are_legitimate_nulls_not_bounds_errors(monkeypatch):
     # In a numeric DataFrame column, a missing value is NaN (pandas' null).
     assert pd.isna(r["poverty_rate"])
     assert pd.isna(r["ami_ratio"])
+
+
+# ── 0.4.2: the July-2026 in-place re-publish ─────────────────────────────────
+#
+# The CDFI Fund re-published the eligibility .xlsb at the SAME URL in July 2026,
+# renaming two headers the loader binds positionally. The guard fired, which is
+# what it exists to do. These tests pin the NEW strings and prove the pin moved
+# rather than widened — an exact-match guard that learned to accept both spellings
+# would no longer be able to detect the next re-publish.
+
+def test_superseded_2025b_headers_now_raise(monkeypatch):
+    """The pin MOVED. Feeding the old Aug-2025b header must now raise, at both
+    renamed indices. If this test ever passes silently, the guard has been
+    widened to tolerate drift."""
+    for idx, old in SUPERSEDED_HEADER_2025B.items():
+        stale = list(LIVE_HEADER)
+        stale[idx] = old
+        rows = [stale] + _padding(1200)
+        with pytest.raises(EligibilitySchemaError) as ei:
+            _load(monkeypatch, rows)
+        assert f"column index {idx}" in str(ei.value)
+
+
+def test_column_2_pin_names_high_migration_rural():
+    """Column 2 is no longer 'poverty or income' alone — as of July 2026 it also
+    carries High Migration Rural tracts (LIC via <=85% AMI under AJCA 2004 §223).
+    The pinned string must say so; this is the semantic change of 0.4.2, and a
+    constant that drifted back would change what ``nmtc_eligible`` asserts."""
+    pinned = ELIGIBILITY_XLSB_EXPECTED_HEADERS[2]
+    assert "High Migration Rural" in pinned
+    assert "Poverty or Income Criteria or" in pinned
+
+
+def test_deep_and_severe_constants_agree_with_pinned_header_definitions():
+    """The file states its own distress definitions in the column 14/15 headers.
+    Parse them and assert the exported constants match, so the two definitions of
+    'distress' in this package can never disagree again (the 0.4.1 defect: the
+    header said MFI<=40%/unemp>=2.5 while the constants said 50%/2.0)."""
+    sev = ELIGIBILITY_XLSB_EXPECTED_HEADERS[14]
+    deep = ELIGIBILITY_XLSB_EXPECTED_HEADERS[15]
+
+    def parse(header):
+        pov = float(re.search(r"Poverty>(\d+)%", header).group(1)) / 100
+        mfi = float(re.search(r"MFI<=(\d+)%", header).group(1)) / 100
+        unemp = float(re.search(r"Unemployment>=([\d.]+)", header).group(1))
+        return pov, mfi, unemp
+
+    assert parse(sev) == (SEVERE_POVERTY_THRESHOLD,
+                          SEVERE_AMI_THRESHOLD,
+                          SEVERE_UNEMPLOYMENT_MULTIPLIER)
+    assert parse(deep) == (DEEP_POVERTY_THRESHOLD,
+                           DEEP_AMI_THRESHOLD,
+                           DEEP_UNEMPLOYMENT_MULTIPLIER)
+
+
+def test_national_unemployment_rate_matches_cdfi_fund_notes():
+    """The file's NOTES sheet, Column L: 'the national unemployment rate, which
+    is 5.4 percent.' Verified independently by exact arithmetic over the live
+    file: col H / col L == 5.400000 for all 82,107 rows with a non-zero ratio.
+    0.4.1 shipped 5.7%, which raised the unemployment bar on every distress
+    comparison."""
+    assert NATIONAL_UNEMPLOYMENT_RATE == 0.054
+
+
+def test_schema_error_message_tells_the_user_what_to_do(monkeypatch):
+    """H3: when this fires again — and it will, because the Fund re-publishes at
+    the same URL — the exception itself must carry the remedy."""
+    bad = list(LIVE_HEADER)
+    bad[2] = "Does Census Tract Qualify For Something Else Entirely?"
+    rows = [bad] + _padding(1200)
+    with pytest.raises(EligibilitySchemaError) as ei:
+        _load(monkeypatch, rows)
+    msg = str(ei.value)
+    assert "column index 2" in msg                     # still names the index
+    assert "re-publishes" in msg or "re-published" in msg
+    assert "upgrade" in msg.lower()                    # what to do
+    assert "github.com/Jaypatel1511/nmtc-mapper" in msg
+    # It must NOT offer a bypass — there is no safe one.
+    assert "disable" not in msg.lower()
+    assert "skip" not in msg.lower()
+
+
+# ── 0.4.2: stale-cache self-heal ─────────────────────────────────────────────
+#
+# download_eligibility_file() returns the cached copy whenever one exists, and
+# the CDFI Fund re-publishes IN PLACE under an unchanged filename. So a user who
+# ran 0.4.1 has the superseded file sitting in ~/.nmtcmapper/cache, and simply
+# upgrading to 0.4.2 would STILL fail: the new pins would be validated against
+# the OLD cached bytes. The upgrade remedy would be advice they had just taken.
+# On a schema mismatch against a CACHED file, re-download once and re-validate.
+# This does not weaken the guard — the fresh file is validated exactly as
+# strictly, and a genuine upstream divergence still raises.
+
+def _warm_cache(monkeypatch, tmp_path, *, cached_rows, fresh_rows):
+    """Model a warm cache: the load serves `cached_rows`; a forced download
+    replaces them with `fresh_rows`. Returns a state dict counting downloads."""
+    cache_file = tmp_path / "NMTC_LIC_Eligibility_2016_2020.xlsb"
+    cache_file.write_bytes(b"")                       # exists() -> True
+    state = {"rows": cached_rows, "downloads": 0}
+
+    def fake_download(force=False):
+        if force:
+            state["downloads"] += 1
+            state["rows"] = fresh_rows
+        return cache_file
+
+    monkeypatch.setattr(loader, "_eligibility_cache_path", lambda: cache_file)
+    monkeypatch.setattr(loader, "download_eligibility_file", fake_download)
+    monkeypatch.setattr("pyxlsb.open_workbook",
+                        lambda *_a, **_k: _FakeWorkbook(state["rows"]))
+    return state
+
+
+def test_stale_cached_file_triggers_one_redownload_then_succeeds(monkeypatch, tmp_path):
+    stale = list(LIVE_HEADER)
+    stale[2] = SUPERSEDED_HEADER_2025B[2]
+    state = _warm_cache(monkeypatch, tmp_path,
+                        cached_rows=[stale, PIN_ELIGIBLE] + _padding(1200),
+                        fresh_rows=[LIVE_HEADER, PIN_ELIGIBLE] + _padding(1200))
+    df = loader.load_eligibility_table()
+    assert state["downloads"] == 1          # re-downloaded exactly once
+    assert "01001020200" in df.index
+
+
+def test_redownload_that_still_mismatches_raises_and_does_not_loop(monkeypatch, tmp_path):
+    """If the fresh file diverges too, the guard must still fail loud — and must
+    not retry forever."""
+    stale = list(LIVE_HEADER)
+    stale[2] = SUPERSEDED_HEADER_2025B[2]
+    diverged = list(LIVE_HEADER)
+    diverged[2] = "Does Census Tract Qualify For Some Future Criterion?"
+    state = _warm_cache(monkeypatch, tmp_path,
+                        cached_rows=[stale] + _padding(1200),
+                        fresh_rows=[diverged] + _padding(1200))
+    with pytest.raises(EligibilitySchemaError) as ei:
+        loader.load_eligibility_table()
+    assert state["downloads"] == 1          # exactly one retry, not a loop
+    assert "Future Criterion" in str(ei.value)
+
+
+def test_explicit_force_does_not_retry(monkeypatch, tmp_path):
+    """force=True already fetched fresh bytes; a mismatch there is real."""
+    diverged = list(LIVE_HEADER)
+    diverged[13] = "Some Future High Migration Column"
+    state = _warm_cache(monkeypatch, tmp_path,
+                        cached_rows=[diverged] + _padding(1200),
+                        fresh_rows=[diverged] + _padding(1200))
+    with pytest.raises(EligibilitySchemaError):
+        loader.load_eligibility_table(force=True)
+    assert state["downloads"] == 1          # the caller's own forced download only

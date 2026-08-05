@@ -1,7 +1,7 @@
 """
 Download and cache the CDFI Fund NMTC eligibility file.
-Builds a lookup table of the FULL census-tract universe (85,395 tracts: 35,167
-eligible + 50,228 ineligible), each carrying an explicit YES/NO LIC flag. A
+Builds a lookup table of the FULL census-tract universe (85,395 tracts: 35,335
+eligible + 50,060 ineligible), each carrying an explicit YES/NO LIC flag. A
 tract ABSENT from this table is therefore unknown/indeterminate, not ineligible.
 """
 import os
@@ -36,6 +36,33 @@ def _normalize_header(value) -> str:
     return re.sub(r"\s+", " ", str(value)).strip().casefold()
 
 
+# Appended to every schema-drift message (0.4.2). This guard has now fired in
+# the field once: the CDFI Fund re-published the eligibility file at the SAME URL
+# in July 2026 with two renamed headers, and every live load failed until the
+# pinned constants were updated. When that happens the exception is the only
+# thing the user sees, so it has to carry the explanation and the remedy.
+#
+# Deliberately offers NO bypass. There is no safe one: the loader binds columns
+# positionally, so continuing past a header it does not recognize means reading
+# eligibility out of an unverified slot — a wrong NMTC answer that looks right.
+_DRIFT_REMEDY = (
+    "\n\nWhy this happens: the CDFI Fund re-publishes the eligibility file IN "
+    "PLACE, at the same URL, without changing the filename — so a new layout can "
+    "arrive under a file this package already believed it understood. nmtc-mapper "
+    "pins the exact header strings on purpose, and fails here rather than parse a "
+    "changed file against stale positions."
+    "\n\nWhat to do: upgrade nmtc-mapper — a release that recognizes the new "
+    "layout may already exist (pip install --upgrade nmtc-mapper). If you are "
+    "already on the latest version, please report this, quoting the mismatch "
+    "above: https://github.com/Jaypatel1511/nmtc-mapper/issues"
+    "\n\nIf you reached this from a cached copy, a fresh download has already "
+    "been attempted automatically and also failed to match, so the live file "
+    "genuinely differs from what this release pins."
+    "\n\nThere is no supported way to bypass this check. The verdicts it would "
+    "let through are not trustworthy."
+)
+
+
 def _validate_xlsb_header(header_vals: list) -> None:
     """Fail loud (EligibilitySchemaError) BEFORE any row is parsed if the live
     .xlsb structure does not match the expected CDFI Fund layout.
@@ -50,6 +77,7 @@ def _validate_xlsb_header(header_vals: list) -> None:
             f"eligibility .xlsb header has {n} columns, expected "
             f"{ELIGIBILITY_XLSB_COLUMN_COUNT}. The column layout has changed — "
             f"the positional bind can no longer be trusted."
+            + _DRIFT_REMEDY
         )
     for idx, expected in ELIGIBILITY_XLSB_EXPECTED_HEADERS.items():
         actual = header_vals[idx] if idx < n else None
@@ -59,6 +87,7 @@ def _validate_xlsb_header(header_vals: list) -> None:
                 f"expected {expected!r}, got {actual!r}. The loader binds columns "
                 f"positionally, so a renamed/re-ordered column would be read "
                 f"against the wrong field."
+                + _DRIFT_REMEDY
             )
 
 
@@ -88,9 +117,17 @@ def _cache_path(filename: str) -> Path:
     return get_cache_dir() / filename
 
 
+# The cache filename never changes — and neither does the CDFI Fund's URL when
+# they re-publish, which is why a warm cache can hold a superseded layout.
+ELIGIBILITY_CACHE_FILENAME = "NMTC_LIC_Eligibility_2016_2020.xlsb"
+
+
+def _eligibility_cache_path() -> Path:
+    return _cache_path(ELIGIBILITY_CACHE_FILENAME)
+
+
 def download_eligibility_file(force: bool = False) -> Path:
-    filename = "NMTC_LIC_Eligibility_2016_2020.xlsb"
-    path = _cache_path(filename)
+    path = _eligibility_cache_path()
     if path.exists() and not force:
         print(f"Using cached eligibility file: {path}")
         return path
@@ -131,15 +168,41 @@ def download_eligibility_file(force: bool = False) -> Path:
 
 
 def load_eligibility_table(force: bool = False) -> pd.DataFrame:
+    """Load the CDFI Fund eligibility table, preferring the cached copy.
+
+    Stale-cache self-heal (0.4.2): the CDFI Fund re-publishes this file IN PLACE
+    under an unchanged filename, so a cache warmed by an earlier release can hold
+    a superseded layout. Validating the new pins against those old bytes would
+    raise EligibilitySchemaError and tell the user to upgrade — advice they had
+    just taken. So a schema mismatch on a CACHED file re-downloads once and
+    re-validates. This does NOT weaken the guard: the fresh file is checked just
+    as strictly, and a genuine upstream divergence still raises (once, not in a
+    loop). An explicit force=True already fetched fresh bytes, so it never
+    retries.
+    """
+    served_from_cache = (not force) and _eligibility_cache_path().exists()
+    try:
+        return _load_eligibility_table(force=force)
+    except EligibilitySchemaError:
+        if not served_from_cache:
+            raise
+        print(
+            "Cached eligibility file does not match the expected CDFI Fund "
+            "layout. The Fund re-publishes in place, so the cached copy may be "
+            "superseded — re-downloading once and re-validating..."
+        )
+        return _load_eligibility_table(force=True)
+
+
+def _load_eligibility_table(force: bool = False) -> pd.DataFrame:
     path = download_eligibility_file(force=force)
     if path is None or not path.exists():
         # download_eligibility_file now raises on any download failure, so a
         # missing file here means the download step was skipped and no local
         # copy exists. Fail loud — never substitute demo data (F2).
         raise EligibilityDownloadError(
-            f"No eligibility file available at "
-            f"{_cache_path('NMTC_LIC_Eligibility_2016_2020.xlsb')} and no download "
-            f"was performed."
+            f"No eligibility file available at {_eligibility_cache_path()} and no "
+            f"download was performed."
         )
     print(f"Loading eligibility table from {path}...")
     try:

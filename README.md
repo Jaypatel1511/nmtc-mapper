@@ -191,8 +191,10 @@ deferred to 0.5.0 — see the CHANGELOG.
     # docs-check: skip shell command; the suite is run by CI, not by this gate
     PYTHONPATH=. pytest tests/ -v
 
-114 tests across all modules (including fail-loud, explicit-sample-mode,
-tri-state eligibility, and async-batch coverage).
+127 tests across all modules (including fail-loud, explicit-sample-mode,
+tri-state eligibility, async-batch, and schema-drift coverage). 8 of these are
+`@live` tests that hit the real CDFI Fund / Census endpoints; CI deselects them
+with `-m "not live"`, leaving 119 offline.
 
 ---
 
