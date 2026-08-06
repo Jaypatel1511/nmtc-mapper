@@ -141,8 +141,9 @@ definitions.
   in high migration rural counties — so it returned eligible for all 168, and for
   932 tracts in total that the Fund publishes as ineligible. A right answer from
   an over-inclusive rule. **This is established at the code level and could not
-  be executed end-to-end:** the pre-v0.3.1 source URL now redirects to a 404 and
-  has no Wayback capture, so the `.xlsx` itself is unavailable. Executing the
+  be executed end-to-end:** the pre-v0.3.1 source URL now redirects to a 404
+  (verified), and no archived copy could be retrieved, so the `.xlsx` itself is
+  unavailable. Executing the
   v0.3.0 `_compute_eligibility()` verbatim against the 168 tracts' published
   metrics returns eligible for 168 of 168 — but only on the assumption that the
   retired workbook exposed a column that `ELIGIBILITY_FILE_COLUMNS` mapped to
