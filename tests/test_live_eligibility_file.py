@@ -91,8 +91,16 @@ def test_live_severe_and_deep_flags_match_the_corrected_thresholds(live_table):
     newly-LIC High Migration Rural tracts. Anything beyond that means our
     thresholds have drifted from the Fund's definition again.
 
-    Bounding the disagreement is the point: the 0.4.1 constants (MFI<=50%,
-    unemployment>=2.0x) disagree on 5,025 rows, which this assertion catches.
+    These are the numbers for the LIVE (July-2026) file. Against the superseded
+    Aug-2025b file, reading LIC from column C alone, the same constants fit with
+    ZERO mismatches; the CHANGELOG's "zero mismatches" figure is that one, and
+    it does not describe the file this test loads.
+
+    Bounding the disagreement is the point. On this same file, substituting the
+    0.4.1 thresholds (MFI<=50%, unemployment>=2.0x) while keeping the corrected
+    5.4% divisor disagrees on 5,025 rows, and the 0.4.1 release as shipped
+    (those thresholds plus a 5.7% divisor) on 4,420 — either would blow through
+    this assertion.
     """
     df = live_table
     ratio = df["unemployment_rate"] / 0.054      # tract rate / national rate

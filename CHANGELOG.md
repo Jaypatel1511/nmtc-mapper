@@ -156,9 +156,23 @@ definitions.
   `Deep distress=LIC AND (Poverty>40%; MFI<=40%;Unemployment>=2.5)` — the same
   string this package has carried as the column-15 header pin since 0.4.0. The
   package held the correct definition in one place and the wrong one in another.
-  Confirmed empirically: `LIC AND (poverty>40% OR MFI<=40% OR unemployment
-  ratio>=2.5)` reproduces the published deep-distress flag with **zero
-  mismatches across all 85,395 rows**; the 0.4.1 pair misses on 5,015.
+
+  Corroborated empirically, and the measurement has to name its file.
+  `LIC AND (poverty>40% OR MFI<=40% OR unemployment ratio>=2.5)` reproduces the
+  published deep-distress flag with **zero mismatches across all 85,395 rows of
+  the Aug-2025b file**, reading LIC from column C alone. That zero does **not**
+  survive the July-2026 re-publish: the Fund widened column C without
+  recomputing columns O/P, so against the live file the same rule mismatches on
+  **3** deep rows — and 20 severe — every one of them among the 168 (see Notes).
+  The rule did not get worse; the Fund's published flags stopped agreeing with
+  the Fund's published LIC column.
+
+  For scale on the live file: this pair misses 3 deep rows. Substituting the
+  0.4.1 thresholds (MFI≤50%, ratio≥2.0) while keeping the corrected 5.4%
+  divisor misses 5,025. The 0.4.1 release as actually shipped — those
+  thresholds *and* the 5.7% divisor — misses 4,420. No prong is redundant:
+  dropping the poverty term alone costs 1,183 rows, the MFI term 1,244, the
+  unemployment term 2,839.
 
 - **`NATIONAL_UNEMPLOYMENT_RATE` 0.057 → 0.054.** The Fund's NOTES sheet, row
   *"Column L"*: *"the ratio between the census tract unemployment rate and the

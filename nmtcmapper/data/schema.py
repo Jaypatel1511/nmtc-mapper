@@ -87,9 +87,24 @@ SEVERE_UNEMPLOYMENT_MULTIPLIER = 1.5    # >= 1.5x national unemployment rate
 #      in another).
 #   3. Empirical: LIC AND (poverty>40 OR mfi<=0.40 OR unemp_ratio>=2.5)
 #      reproduces the published column-15 flag with ZERO mismatches across all
-#      85,395 rows. The 0.4.1 pair (0.50 / 2.0) misses by 5,015 rows.
+#      85,395 rows OF THE AUG-2025b FILE, reading LIC from column C alone.
+#
+#      BE PRECISE ABOUT WHICH FILE. That zero does NOT hold on the July-2026
+#      re-publish: the Fund widened column C to absorb column N without
+#      recomputing columns O/P, so against the live file the same rule mismatches
+#      on 3 deep rows (and 20 severe), every one of them among the 168. The rule
+#      did not get worse — the published flags stopped agreeing with the
+#      published LIC column. Quoting the zero without naming the file overstates
+#      the fit on the data this release actually ships against.
+#
+#      For scale, on the live file: this pair misses 3 deep rows; substituting
+#      the 0.4.1 thresholds (mfi<=0.50, ratio>=2.0) while keeping the corrected
+#      5.4% divisor misses 5,025; the 0.4.1 release as actually shipped
+#      (0.50 / 2.0 / 5.7%) misses 4,420.
 # Note the criteria are OR-ed with each other and AND-ed with LIC — the header's
-# semicolons read as "or", confirmed by the same zero-mismatch fit.
+# semicolons read as "or", confirmed by the same fit. No prong is redundant:
+# dropping the poverty term alone costs 1,183 rows, the MFI term 1,244, the
+# unemployment term 2,839.
 DEEP_POVERTY_THRESHOLD         = 0.40   # > 40% poverty rate
 DEEP_AMI_THRESHOLD             = 0.40   # <= 40% of AMI
 DEEP_UNEMPLOYMENT_MULTIPLIER   = 2.5    # >= 2.5x national unemployment rate
