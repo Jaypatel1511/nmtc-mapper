@@ -136,7 +136,7 @@ and false of 76:
 | Class | Count | What it is |
 |---|---|---|
 | 2010 GEOID retired at the 2020 vintage | **1,332** | Genuine vintage miss: the tract exists in the 2010 gazetteer and in the relationship file, and has no 2020 tract of the same code. |
-| **Island Areas** (FIPS 60, 66, 69, 78) | **75** | American Samoa, Guam, CNMI, USVI. These are **not in the Fund's table at any vintage** — the 2016–2020 ACS did not cover them, and the Fund publishes Island Areas LIC eligibility in a separate file (`NMTC_LIC_Territory_2020_December_2023.xlsx`) built on the 2020 Island Areas Decennial Census. Their absence is a coverage hole, permanent, and has nothing to do with tract vintage. |
+| **Island Areas** (FIPS 60, 66, 69, 78) | **75** | American Samoa, Guam, CNMI, USVI. These are **not in the Fund's table at any vintage** — the 2016–2020 ACS did not cover them, and the Fund publishes Island Areas LIC eligibility in a separate file (`NMTC_LIC_Territory_2020_December_2023.xlsx`) built on the 2020 Island Areas Decennial Census. Their absence is a coverage hole, permanent, and has nothing to do with tract vintage. It is also a gap in a **named federal criterion**, not merely in coverage: FAQ Q32 enumerates *"4) US Island Areas: Island Areas of the United States, as determined by the United States Census Bureau including Puerto Rico, U.S. Virgin Islands, Guam, the Commonwealth of the Northern Mariana Islands, and American Samoa"* as one of the four Areas of Deep Distress criteria. Puerto Rico falls inside that criterion **and** inside the Fund's table, so the 75 uncovered tracts are the four non-PR Island Areas only — but for those four the package cannot evaluate a criterion the Fund has published. |
 | Not a valid tract at either vintage | **1** | `51019050100` — present in the OZ designation file, absent from the 2010 gazetteer, absent from the 2010 side of the relationship file, absent from the 2020 table. A defect in the source designation list, not in this package. |
 
 The `nmtc-eligibility` skill already documents the Island Areas hole correctly
@@ -179,8 +179,9 @@ from the 2010 tract of the same number. An address in the other 87.6% gets a
 
 This does not change the decision — `True`/`None` remains correct, and the
 alternative (suppressing 527 true positives) is worse. It changes what the
-package may *say*. **0.5.0's README, and the skill, state the `True` direction as
-a claim about the designation list, not about the parcel**, and note that for
+package may *say*. **0.5.0's README, the skill, and `summary()`'s rendered `YES`
+line (§M4.2) state the `True` direction as a claim about the designation list, not
+about the parcel**, and note that for
 roughly 7% of matches the 2020 tract's boundary differs materially from the
 designated 2010 tract. That is the honest form of "a `Yes` is trustworthy."
 
@@ -201,6 +202,34 @@ without a crosswalk.
 release's user-visible impact and it belongs in the document, the CHANGELOG's
 upgrade table, and the skill — not the 1,408, which is only the subset where the
 old `False` was demonstrably wrong rather than merely unsupportable.
+
+**The obvious objection, named and answered: `None` for nine tracts in ten is a lot,
+and the field still earns its place.** A reader who watches 91.4% of a lookup's
+answers turn into "unknown" is entitled to ask whether the lookup is worth shipping.
+It is, for a structural reason rather than a consoling one: **the OZ test is keyed on
+the designation set, not on the eligibility table.** `is_opportunity_zone` is computed
+as `tract_id in self._oz_tracts`, evaluated independently of `tract_found`
+(`mapper.py:118`, `mapper.py:137`). The field therefore returns `True` for **all 8,764
+designations** when a caller passes a GEOID directly — not merely the 7,356 that also
+have a row in the 2020-basis table. Verified by execution this session:
+`check_tract()` over all 8,764 designated GEOIDs returns `is_opportunity_zone=True`
+**8,764 times**, including for each of the 1,408 that return `tract_found=False`
+(e.g. `01003011502` → `is_opportunity_zone=True`, `tract_found=False`,
+`eligibility_status='not-found'`). The 91.4% is a property of *the table's tract
+universe*, which is the wrong denominator for judging the OZ field: the 78,039 are
+overwhelmingly tracts that were never designated, and `None` is the honest answer for
+each of them, because a non-designation and a vintage miss are the same observation
+without a crosswalk (§M1.5).
+
+The portfolio has already accepted this trade in a stronger form. `oz-tracker` 0.2.0
+— prepared, version set in `pyproject.toml`, and deliberately **not** published —
+makes `is_designated()`, `is_eligible()` and `is_rural()` return `True` or `None` and
+never `False`, and its checkers raise on essentially every call because both upstream
+sources return HTTP 404. Its CHANGELOG states the rule this release applies one
+package over: *"a package that says 'I cannot answer' is strictly better than one that
+answers wrong."* A lookup that is largely non-functional **by design** is a coherent
+artefact when the alternative is one that is confidently wrong. What is not coherent
+is a lookup that hides the ratio. 0.5.0 publishes the ratio.
 
 Two paths outside the table are also affected and must be changed with it:
 
@@ -245,9 +274,34 @@ threshold — and that threshold, not the statute, would decide whether a deal's
 **(b) Maintenance burden and vintage drift.** The relationship file is 18.7 MB for
 one vintage pair. The 2030 decennial produces a new tract basis, at which point the
 package needs 2010↔2020↔2030 chaining and the share-threshold problem compounds at
-every hop. Meanwhile OZ 2.0 designations under OBBBA §70421 are expected in 2027 on
-a *newer* basis again, so the crosswalk this release would ship is one the next
-release would have to re-derive rather than extend.
+every hop.
+
+The OZ 2.0 half of this argument was carried uncited, and it was wrong. It is
+corrected here rather than deleted. The date is real and now sourced: **Rev. Proc.
+2026-14** (effective April 6, 2026) provides the procedure for nominating tracts to
+be designated as QOZs **effective January 1, 2027**, and Treasury's Office of Tax
+Analysis published the eligibility and rural methodologies for those designations
+under **§70421 of the One Big Beautiful Bill Act** in March 2026 — all read and
+digest-pinned in `docs/oz2-methodology.md` §0 (S1, S3, S4), the sibling decision
+document for that question.
+
+What was wrong is the clause attached to the date. OZ 2.0 is **not** on a newer
+tract *basis*. Rev. Proc. 2026-14 §3.01(3) fixes the eligible tracts' boundaries to
+those "**established for the 2020 decennial census**" — the same decennial basis
+this package already uses. The difference is one of *scheme*, not basis: Treasury's
+own rural methodology (S4, footnote 10) directs readers to combine the eligible-tract
+list with the **2024 TIGER** census-tract map, so the Appendix's keys are the 2024
+annual vintage of the 2020 delineation, which `docs/oz2-methodology.md` shows is not
+pointwise identical to the 2020 delineation as first published.
+
+Corrected, the point survives in weaker but still usable form. A 2010↔2020 crosswalk
+would *not* be obsoleted by OZ 2.0, since OZ 2.0 shares the 2020 basis — so that is
+**not** a reason the next release would have to re-derive it. It remains a reason not
+to trust a crosswalk's keys across releases, because scheme drift *inside* one basis
+is precisely the failure the portfolio's tract-vintage methodology formalises as
+*scheme strictly dominates basis*. Ground (b) is the second-strongest of the three
+either way; **(a) — the 38.7% mixed-descent measurement — is the load-bearing
+evidence and is untouched by this correction.**
 
 **(c) It is not the package's determination to make.** The CDFI Fund's own answer
 to "I can't find a 2010 census tract in the 2016-2020 ACS data" (*2016-2020 ACS
@@ -351,10 +405,30 @@ and the Navajo Nation in fact spans three states.
 So establishing native-area status for a tract is a **polygon intersection**
 (TIGER/Line AIANNH shapefiles against TIGER/Line tract shapefiles), not a table
 join on a key. That means: a geospatial dependency stack this package does not
-have, a coverage decision (any overlap? centroid? majority land?) that the Fund has
-not published a rule for, and an answer this package would be inventing. Removing
-the field is the only option that does not require the package to make up a
+have, a coverage decision (any overlap? centroid? majority land?) **that the Fund has
+not published a rule for under NMTC**, and an answer this package would be inventing.
+Removing the field is the only option that does not require the package to make up a
 methodology for a federal compliance category.
+
+The NMTC qualifier in that sentence is load-bearing, and the general form of the claim
+would have been overstated. The Fund *does* perform tract-keyed native-area
+qualification — for other programs. Its CIMS map service
+(`/arcgis/rest/services/PN/CIMS3_PN_View/MapServer`, 88 layers, enumerated this
+session) carries **`Native American IA Qualifying Tract`** (layer 39, with 2016-2020
+variants at 102-104 and an FY2014 variant at 59) and **`Native American BEA Qualifying
+Tract`** (layer 38, with `Native BEA FY2014 Qualified Tract` at 10) — tract-level
+*qualification* layers for Native Initiatives and the Bank Enterprise Award. The NMTC
+layer family in the same service is `2016-2020 NMTC Census Tracts` (91), `2016-2020
+NMTC Qualified Census Tracts` (94) and their 2006-2010 / 2011-2015 predecessors
+(45-50), and it has **no native-area member**. The underlying geographies are
+published in the same service too (`Native American Areas`, 37; `Federal Indian
+Reservation`, 41), so the absence is not one of source data.
+
+That is a stronger and narrower fact than "the Fund has not published a rule": the
+Fund has published a tract-keyed native-area determination **twice, for two other
+programs, and not for NMTC**. It also makes a future NMTC source plausible rather than
+speculative — which is exactly the condition §M2.3(3) sets for the field returning as
+a real field with real `True` values.
 
 ---
 
@@ -411,9 +485,9 @@ asserts and whether the package can support it; and the remedy.
 |---|---|---|---|---|
 | 1 | `nmtc_eligible` *(already tri-state)* | Column C **or** column N is `YES` — the Fund's LIC determination | Both are `NO`. **Yes** — a published `NO`, verified strict-binary | None needed (0.4.0) |
 | 2 | `is_non_metro` | Column 1 ≠ `Metro` | Column 1 is `Metro`. **Yes** today — but see §M3.3, the parse is a not-equal test | Keep; harden the parse |
-| 3 | `is_high_migration_rural` | Column N is `YES` — an LIC *determination* under §45D(e)(5) (0.4.2) | Column N is `NO`. **Yes** — published, strict-binary | Keep |
-| 4 | `severe_distress` | Column O is `YES` — the Fund's published severe-distress designation | Column O is `NO`. **Yes** — published, strict-binary, and unaffected by null demographics | Keep |
-| 5 | `deep_distress` | Column P is `YES` — the Fund's published deep-distress designation | Column P is `NO`. **Yes** — same | Keep |
+| 3 | `is_high_migration_rural` | Column N is `YES` — an LIC *determination* under §45D(e)(5) (0.4.2) | Column N is `NO`. **Yes** — published, strict-binary | Keep; harden the parse (§M3.3) |
+| 4 | `severe_distress` | Column O is `YES` — the Fund's published severe-distress designation | Column O is `NO`. **Yes** — published, strict-binary, and unaffected by null demographics | Keep; harden the parse (§M3.3) |
+| 5 | `deep_distress` | Column P is `YES` — the Fund's published deep-distress designation | Column P is `NO`. **Yes** — same | Keep; harden the parse (§M3.3) |
 | 6 | `is_nmtc_native_area` | **Nothing. Never `True`** — 0 of 85,395; hardcoded `False` at `loader.py:405` | "Not determined." **No** — the package has no source and can never have one from this file | **DROP** (§M2) |
 | 7 | `is_opportunity_zone` | The GEOID is on the Dec-2018 designation list | "Not designated" **or** "vintage miss" **or** "Island Area outside this table". **No** | **`Optional[bool]`** (§M1) |
 | 8 | `tract_found` | A row for this GEOID exists in the loaded table | No row exists. **Yes** — it is a statement about the table, not the world, and the table is fully enumerated | Keep |
@@ -445,8 +519,15 @@ asserts and whether the package can support it; and the remedy.
 | 6 | `is_nmtc_native_area` | — | **No** (dropped anyway) |
 | 7 | `is_opportunity_zone` | On the geocode-failure branch only: "not an OZ", with no tract in hand | **No** |
 
-**Six fabricated negatives per indeterminate result, in the branch built to
-prevent exactly that.** The tri-state work stopped at the verdict; the supporting
+**Six fabricated negatives per indeterminate result on the geocode-failure branch,
+five on the `check_tract()` miss — in the two branches built to prevent exactly
+that.** The count differs by one because `is_opportunity_zone` is not among the
+booleans `check_tract()`'s miss branch sets: on that path a real membership test runs
+against a real GEOID (`tract_id in self._oz_tracts`, `mapper.py:137`) and its answer
+is correct — that is the §M1.4 carve-out. Only the geocode-failure branch, which has
+no GEOID in hand at all, fabricates the sixth. The §M3.2 table above is precise on
+this; it was the bolded summary that rounded both branches up to six. The tri-state
+work stopped at the verdict; the supporting
 booleans it left behind still speak with full confidence about a tract the package
 never read. A downstream consumer filtering `df[~df.is_high_migration_rural]` or
 reading `result.severe_distress` off an unknown tract gets a confident wrong
@@ -486,8 +567,27 @@ path the day the Fund reuses that column.
 `EligibilitySchemaError` with the offending value and row index, exactly as the
 value-bounds guard does for numerics. This costs nothing today (0 rows affected,
 invariants unmoved) and closes a silent-drift channel the header guard structurally
-cannot see. Consider the same treatment for columns N/O/P, whose `== "YES"` tests
-map every unrecognised value to `False` — the fabricated-negative direction.
+cannot see.
+
+**The same treatment is decided — not "considered" — for columns N, O and P.** Their
+`== "YES"` tests map every unrecognised value to `False`: `'Y'` parses to `False`
+today. Hardening column 1 alone would harden the one column that drifts toward a
+**false positive** and leave at "consider" the three that drift toward **false
+negatives**, which is backwards relative to this document's entire thesis — the
+fabricated negative is the defect the release exists to close, and N/O/P are where a
+vocabulary change would produce one. 0.5.0 therefore gives all four columns a value
+allowlist: `{"YES", "NO"}` for N/O/P and `{"METRO", "NON-METRO"}` for column 1,
+matched after the existing `strip().upper()` normalisation, with anything else raising
+`EligibilitySchemaError` naming the column, the offending value and the row index. As
+with column 1 this is 0 rows affected today and no invariant moves (§M3.1a re-verified
+all five columns strict-binary across 85,395 rows).
+
+One structural point applies to all four and is worth stating once, because it is why
+these guards are not redundant with the ones already shipped: **the header guard pins
+header *strings*, not cell *vocabularies*.** A re-publish that leaves every header
+byte-identical and changes one cell from `YES` to `Y` passes the header check
+completely — and the July-2026 re-publish is standing proof that this Fund edits this
+file in place. The value allowlist is the only guard that can see that change.
 
 ### M3.4 `geocode_success` asserts something that did not happen
 
@@ -559,8 +659,10 @@ brief; neither is a site. And `summary()` renders only three of the nine boolean
 `is_nmtc_native_area` are never printed at all.
 
 **`is_opportunity_zone` is absent from `enrich()` output entirely.** The batch path
-produces 11 eligibility columns plus `eligibility_status`; OZ status is not among
-them (confirmed against the demo notebook's exported column list). Single-address
+produces **ten** eligibility columns plus `eligibility_status` — **eleven** in total,
+not "eleven plus `eligibility_status`"; the `eligibility_cols` list in
+`enrich_dataframe()` holds exactly ten names and `eligibility_status` is assigned
+separately a few lines below it. OZ status is not among them (confirmed against the demo notebook's exported column list). Single-address
 callers get an OZ answer; batch callers cannot. 0.5.0 should **not** close that gap
 — adding columns is a data-surface change, not an honesty fix, and this release's
 invariant surface must stay small — but the README's Output Columns table must stop
@@ -574,7 +676,8 @@ the qualifier is **inline on the same line**, never a footer, because a footer i
 what gets dropped when a user copies one line into a memo.
 
 ```
-  Opportunity Zone: ✅ YES — designated 2018 QOZ
+  Opportunity Zone: ✅ YES — GEOID is on the Dec-2018 designation list, which is
+                    2010-tract-based (a claim about the list, not about the parcel)
   Opportunity Zone: ❓ NOT CONFIRMED — not on the 2018 designation list, which is
                     2010-tract-based (indeterminate, NOT "not an Opportunity Zone")
   Opportunity Zone: ❓ UNKNOWN — no census tract resolved
@@ -582,6 +685,18 @@ what gets dropped when a user copies one line into a memo.
 
 The middle line is the 78,039-tract case and the one that matters. It must not
 contain the word "no" as a verdict. The third line is the geocode-failure branch.
+
+**The `True` line carries a qualifier too, and this section did not give it one.**
+That was the document applying its own principle asymmetrically: the indeterminate
+line got a full inline explanation while the `True` line shipped bare as
+`✅ YES — designated 2018 QOZ`. §M1.3 already measured why a bare `YES` is not good
+enough — **527 of the 7,356 `True`s (7.2%)** are 2020 tracts drawing under 99% of
+their land from the same-numbered 2010 tract, and the worst, `42063961102`, draws
+**12.4%**; an address in the other 87.6% gets a `True` for a designation that does not
+cover the ground it stands on. If the reason a footer is unacceptable for the `None`
+state is that users paste a single line into a memo, that reason applies unchanged to
+the `True` state — whose line is *more* likely to be pasted, because it is the one
+that helps the deal. The qualifier is inline for all three states.
 
 Same three-state treatment, same inline-qualifier pattern, for `Non-Metro:` and
 `High Migration:` when they are `None`:
@@ -720,10 +835,19 @@ qualifications:
 2. **A wrong rule in a demo teaches the wrong rule.** The sample table is what the
    README, the notebook, and the offline tests exercise. It is the version of NMTC
    eligibility a reader learns from.
-3. **The dead branch should go.** Deleting `_process_eligibility_table` and
-   `ELIGIBILITY_FILE_COLUMNS` in 0.5.0 removes 22 lines that cannot run and one
-   mapping that misleads maintainers about where `is_nmtc_native_area` could come
-   from — directly relevant to §M2. It is not a behaviour change; nothing reaches it.
+3. **The dead branch should go.** The "22 lines" this document first attributed to
+   deleting `_process_eligibility_table` **and** `ELIGIBILITY_FILE_COLUMNS` is the
+   size of the function alone: `loader.py:424-445`, `def` through `return df`,
+   counted this session — 22 lines exactly, for the function, not for both. The dict
+   is a further **14 lines** (`schema.py:129-142`) under a two-line comment header,
+   and removing the pair also takes the import at `loader.py:20`, the `else`-branch
+   call site at `loader.py:275-276`, and a back-reference in the comment at
+   `schema.py:167`. That is roughly forty lines across two modules; the exact figure
+   is the build's to state after the edit, not this document's to predict. The line
+   count was never the argument. The argument is that the mapping misleads
+   maintainers about where `is_nmtc_native_area` could come from — directly relevant
+   to §M2 — and that removing it is not a behaviour change, because nothing reaches
+   it.
 
 ### M6.2 How wrong the rule is, measured
 
@@ -757,7 +881,22 @@ takes severe from 5,238 disagreements to **20**, and deep from 767 to **3** — 
 those residual 20 and 3 are the known artefact of the July-2026 re-publish widening
 column C without recomputing O and P, already documented in `schema.py`.
 
-**(2) The 85% band belongs to high-migration-rural, not to non-metro.**
+**One negative search, recorded here so it is not run a third time.** Neither
+**26 U.S.C. §45D** nor **Treas. Reg. §1.45D-1** contains the term "distress" in any
+form: **0 occurrences in each**, counted this session over the full text of both
+(`uscode.house.gov`, title 26 §45D, prelim edition; eCFR title 26 §1.45D-1, current),
+against **21** occurrences of "low-income community" in the statute and **153** in the
+regulation. "Severe distress" and "deep distress" are therefore **not statutory
+categories at all** — they are CDFI Fund allocation-agreement commitment categories,
+defined by the Fund in its Application and Compliance FAQ and published by the Fund in
+columns O and P. That is what makes fitting these two rules to the Fund's published
+columns the *correct* method rather than a convenience: there is no statutory text to
+fit them to, and the Fund's column **is** the definition. It also explains the shape of
+the authority list above — column headers first, FAQ second, statute nowhere — which
+would otherwise look like citing the weakest source first.
+
+**(2) The 85% band belongs to high-migration-rural *inside* non-metro — not to
+non-metro, and not to high-migration-rural at large.**
 
 ```python
 ami_lic = (non_metro & (ami <= 0.85)) | (~non_metro & (ami <= 0.80))   # wrong
@@ -769,20 +908,84 @@ tract; the greater of statewide or metro-area MFI for a metro tract) — and the
 workbook has already applied that benchmark, since column 5 is "Census Tract
 Percent of **Benchmarked** Median Family Income." The **85%** figure comes from
 one place only: **§45D(e)(5)**, added by section 223 of the American Jobs Creation
-Act of 2004 (P.L. 108-357), for a tract in a *high migration rural county* — a
-county with net out-migration of at least 10% of its population over the 20 years
-ending with the most recent census. Non-metro is a far larger set: 13,841 tracts
-are non-metro; only 1,422 are high-migration-rural.
+Act of 2004 (P.L. 108-357).
+
+Read §45D(e)(5) against the paragraph it amends. Verbatim from the U.S. Code
+(`uscode.house.gov`, title 26 §45D, prelim edition, fetched and counted this
+session):
+
+> **(e)(1)(B)(i)** "in the case of a tract **not located within a metropolitan
+> area**, the median family income for such tract does not exceed 80 percent of
+> statewide median family income, or"
+>
+> **(e)(1)(B)(ii)** "in the case of a tract **located within a metropolitan area**,
+> the median family income for such tract does not exceed 80 percent of the greater
+> of statewide median family income or the metropolitan area median family income."
+>
+> **(e)(5)(A)** "In the case of a population census tract located within a high
+> migration rural county, **paragraph (1)(B)(i)** shall be applied by substituting
+> '85 percent' for '80 percent'."
+>
+> **(e)(5)(B)** "…the term 'high migration rural county' means any county which,
+> during the 20-year period ending with the year in which the most recent census was
+> conducted, has a net out-migration of inhabitants from the county of at least 10
+> percent of the population of the county at the beginning of such period."
+
+The substitution is attached to **(1)(B)(i)** — the non-metropolitan branch — and to
+nothing else. And §45D(e)(5)(B) contains **no rurality test and no metropolitan
+test**: it is a bare out-migration threshold, so the word "rural" in the statutory
+label carries no definitional weight. A metropolitan county can therefore satisfy the
+definition of "high migration rural county"; when it does, (1)(B)(i) does not apply to
+its tracts at all — they are governed by (1)(B)(ii) — so the substitution has nothing
+to operate on. The 85% band reaches a tract only if it is **both**
+high-migration-rural **and** non-metropolitan. Non-metro is separately a far larger
+set: 13,841 tracts are non-metro; only 1,422 are high-migration-rural.
 
 ```python
-ami_lic = (ami <= 0.80) | (high_migration_rural & (ami <= 0.85))       # correct
+ami_lic = (ami <= 0.80) | (high_migration_rural & ~metro & (ami <= 0.85))  # correct
 ```
 
-Measured: the current rule grants LIC to **932 tracts on the strength of
-non-metro status alone**. The corrected rule reproduces the Fund's published
-column C **exactly — 0 disagreements across all 85,395 rows.** That zero is the
-strongest evidence in this document: the corrected rule is not merely more
-defensible, it is the Fund's rule.
+Measured: the shipped rule grants LIC to **932 tracts on the strength of non-metro
+status alone**. The corrected rule reproduces the Fund's published column C
+**exactly — 0 disagreements across all 85,395 rows.**
+
+**What that zero does and does not establish.** It is the strongest empirical result
+in this document, and it is *silent on the conjunct just restored.* Both
+formulations — with `~metro` and without it — score 0 disagreements, because the
+population that could tell them apart is empty. Re-derived this session, directly
+from the workbook's columns 1 and 13:
+
+| Discriminating population | Count |
+|---|---|
+| High-migration-rural tracts (column 13 = `YES`) | 1,422 |
+| …of which **metropolitan** (column 1 = `Metro`) | **0** |
+| …of which non-metropolitan | 1,422 |
+| Tracts reaching LIC through the 85% band alone (the 168) | 168 |
+| …of which **metropolitan** | **0** |
+| Symmetric difference of the two rules over all 85,395 rows | **0** |
+
+The 168 are the tracts column C absorbed in the July-2026 re-publish; every one of
+them is non-metro, with benchmarked MFI between **80.02%** and **84.99%** — squarely
+inside the band and outside the 80% test. So the zero is strong evidence for exactly
+two propositions: that the split is 80/85 rather than 85/80, and that the 85% band is
+restricted to high-migration-rural rather than to non-metro. It is evidence for
+nothing about the non-metropolitan conjunct, because no row on this file exercises it.
+
+The conjunct is therefore **redundant on the current file as an empirical property,
+not as a logical one** — and the distinction is the whole point. 1,422 of 1,422 HMR
+tracts being non-metro is a fact about one published file, of exactly the kind this
+Fund has already changed once at the same URL without renaming it. Restoring the
+conjunct is a **documentation correction with a verified zero-row behaviour delta**,
+not a behaviour change: §M7's invariants are unmoved, and the build can assert that
+directly (the two rules must agree on all 85,395 rows, and the count of metro HMR
+tracts must be 0 — a test that will fail loudly the day the Fund publishes one).
+
+One sentence on why this was missed, because it is the lesson of the release rather
+than a footnote to it. The shipped rule's defect was that it **conflated non-metro
+with high-migration-rural**; the first correction over-corrected by removing non-metro
+from the band **entirely**. A correction can be wrong in the same direction as the
+defect it corrects — over-inclusive — which is the direction this whole release exists
+to close.
 
 **(3) `>=` vs `>` — correct for LIC, wrong for severe and deep.**
 
@@ -797,17 +1000,30 @@ Settled empirically rather than by reading, because the boundary population is
 non-trivial — 83 LIC tracts sit at exactly 30.0% poverty and 29 at exactly 40.0%.
 Of the LIC tracts at exactly 30.0% that qualify on the poverty prong alone
 (21 tracts), the Fund published `severe = NO` for **all 21**. Of those at exactly
-40.0% qualifying on poverty alone (12 tracts), the Fund published `deep = NO` for
-**all 12**. Disagreement totals confirm it: with `>` the corrected rules disagree
-on 20 severe / 3 deep; with `>=`, on 41 / 16.
+40.0% qualifying on poverty alone (**13** tracts), the Fund published `deep = NO` for
+**all 13**. Disagreement totals confirm it and pin both counts: with `>` the corrected
+rules disagree on 20 severe / 3 deep; with `>=`, on 41 / 16. The differences —
+41 − 20 = **21** and 16 − 3 = **13** — *are* the two discriminating populations, and
+that arithmetic is what caught the earlier figure of 12: a count the document's own
+downstream numbers contradicted.
+
+The thirteenth is `22071980000` — poverty exactly 40.0%, MFI `NA`, unemployment ratio
+0.0, Fund publishes `deep = NO`. An earlier pass dropped it on the grounds that
+"qualifies on the poverty prong alone" cannot be established when MFI is null. That
+exclusion is not principled. The two hypotheses make **opposite** predictions on the
+row — `>=` says deep, `>` says not-deep — and the Fund published `NO`, so it
+discriminates exactly as the other twelve do; a null MFI cannot fire the MFI prong
+under either formulation, which is precisely why the row is decided by the poverty
+prong alone. **13/13, not 12/12.** The conclusion is unchanged — `>` is correct for
+both distress prongs — but a figure its own downstream numbers contradict is not.
 
 | Prong | Current | Correct | Authority |
 |---|---|---|---|
 | LIC poverty | `>= 0.20` | `>= 0.20` (unchanged) | §45D(e)(1)(A), "at least 20 percent" |
-| LIC income | `non_metro ? <= 0.85 : <= 0.80` | `<= 0.80`, plus `hmr & <= 0.85` | §45D(e)(1)(B); §45D(e)(5) |
+| LIC income | `non_metro ? <= 0.85 : <= 0.80` | `<= 0.80`, plus `hmr & ~metro & <= 0.85` | §45D(e)(1)(B)(i)-(ii); §45D(e)(5)(A) |
 | Severe poverty | `>= 0.30` | `> 0.30`, AND LIC | Column-14 header; 21/21 empirical |
 | Severe income / unemployment | `<= 0.60` / `>= 1.5×` | unchanged, AND LIC | Column-14 header |
-| Deep poverty | `>= 0.40` | `> 0.40`, AND LIC | Column-15 header; FAQ Q32; 12/12 empirical |
+| Deep poverty | `>= 0.40` | `> 0.40`, AND LIC | Column-15 header; FAQ Q32; 13/13 empirical |
 | Deep income / unemployment | `<= 0.40` / `>= 2.5×` | unchanged, AND LIC | Column-15 header; FAQ Q32 |
 
 **The sample table's own values move when this is fixed**, since
@@ -922,17 +1138,39 @@ for 0.4.1"* — which 0.4.1 and 0.4.2 both shipped without. **0.5.0 corrects it 
 0.6.0 or deletes the forward-looking sentence**; a version promise that has already
 passed is itself a false claim.
 
-**(b) The README states the wrong deep-distress criteria — and they are federal
-program criteria.** README:141-143 reads *"poverty >= 40% / MFI <= **50%** AMI /
-unemployment >= **2x** national (deep)."* 0.4.2 corrected those constants to
-**MFI <= 40%** and **2.5×**, against the workbook's own column-15 header and the
-NOTES sheet — and the April 2025 Compliance FAQ Q32 independently confirms
-*"median family income that does not exceed **40%**"* and *"unemployment rates at
-least **2.5 times** the national average."* **0.4.2 fixed `schema.py` and the
-CHANGELOG and left the README stating the superseded values.** This is the most
-serious documentation defect in the repository: a user reading the README learns
-the wrong federal criterion, and no gate can catch it. **Fix in 0.5.0, citing FAQ
-Q32.**
+**(b) The README states the wrong distress criteria — and the fix has moved to a
+0.4.3 release.** README:141-143 gets **four** values wrong. It reads *"poverty >= 40%
+/ MFI <= **50%** AMI / unemployment >= **2x** national (deep)"* where 0.4.2 corrected
+the constants to **MFI <= 40%** and **2.5×** against the workbook's own column-15
+header and NOTES sheet; and it states **both** poverty prongs as `>=` (*"poverty >=
+30%"*, *"poverty >= 40%"*) where the Fund publishes strictly greater — the column
+headers read `Poverty>30%` and `Poverty>40%`, and April 2025 Compliance FAQ Q32 states
+the deep criterion as *"census tracts with poverty rates **greater than** 40%"* and
+independently confirms *"a median family income that does not exceed **40%**"* and
+*"unemployment rates at least **2.5 times** the national average."* 0.4.2 fixed
+`schema.py` and the CHANGELOG and left the README asserting the superseded values.
+This was the twenty-third finding when this document was written, and it is still the
+most serious documentation defect in the repository: a user reading the README learns
+the wrong federal criterion, and no gate can catch a prose claim.
+
+**It is no longer 0.5.0's to specify.** A **0.4.3 documentation-accuracy release** is
+being authored in parallel and takes all of it: the four wrong distress values, the
+Native Areas *Higher* → *Deep* Distress mis-categorisation (item (e) below), and the
+Island Areas framing. This document must not specify that work a second time — two
+releases editing the same README lines from two different decision documents is
+exactly how a superseded number gets reintroduced by the later one.
+
+**So this item becomes a verification step, and it gates the 0.5.0 build.** Before
+0.5.0 touches the README at all, the build session must confirm that 0.4.3's
+corrections are **present on `main`** — not merely authored, not merely committed on a
+branch. At the time of writing they are **not**: the branch `fix/0.4.3-docs-accuracy`
+exists and sits at `1485923`, the same commit as `main` and as the annotated tag
+`v0.4.2`, with **zero commits of its own**, and README:141-143 still carries the
+superseded values. The check is concrete and cheap: `git log main --oneline` shows the
+0.4.3 commits, and a grep of `main`'s README finds `MFI <= 40%` and `2.5x` and finds no
+`MFI <= 50%` or `>= 2x`. If that check fails, 0.5.0's README work waits — because the
+0.5.0 rewrite of the Output Columns table and the Known Issues section would otherwise
+be written on top of, and would silently re-assert, the wrong criteria.
 
 **(c) "`_compute_eligibility` exists only for the generic CSV path and the built-in
 synthetic sample" (README:144).** There is no generic CSV path — §M6 proves the
@@ -940,19 +1178,31 @@ synthetic sample" (README:144).** There is no generic CSV path — §M6 proves t
 synthetic sample only," or delete the clause with the dead branch.
 
 **(d) The Output Columns table is incomplete.** It lists nine columns;
-`enrich_dataframe()` writes eleven plus `eligibility_status`. Missing:
+`enrich_dataframe()` writes **ten** eligibility columns plus `eligibility_status` —
+**eleven** in total, not "eleven plus `eligibility_status`". Missing from the README:
 `is_high_migration_rural` and `is_nmtc_native_area` (the latter is being dropped, so
-the correction and the drop land together). The table must also stop implying OZ
-status is available from the batch path — it is not (§M4.1).
+the correction and the drop land together), which is what makes the arithmetic close:
+nine listed + two missing = eleven written. The table must also stop implying OZ status
+is available from the batch path — it is not (§M4.1). This item is an instruction to
+rewrite that table, so the corrected count propagates into the README rather than
+staying here.
 
 **(e) Native Areas is categorised as *Areas of Higher Distress*** in README:192,
 CHANGELOG 0.4.1, and the skill. Per FAQ Q32 it is enumerated under **Areas of Deep
-Distress** (§M2.3). Correct all three.
+Distress** (§M2.3). The README and CHANGELOG halves move to **0.4.3** with item (b);
+the skill half stays with 0.5.0 and is specified at §M9.2 (the 268-272 row). 0.5.0
+**verifies** the first two on `main` rather than performing them.
 
-**(f) A stale comment in `docs-check.toml`** claims *"assertion 3 — the '114 tests'
-claim matches collection."* The README says 140 and collection is 140; the comment
-is describing a prior state. Harmless, but it is a claim about a gate's result, and
-those are the ones that must be true.
+**(f) Two stale "114 tests" references in `docs-check.toml`**, not one.
+`docs-check.toml:120` claims *"assertion 3 — the '114 tests' claim matches
+collection."* The README says 140 and collection is 140, so the comment describes a
+prior state. `docs-check.toml:33` carries the same stale number in a different role —
+*"Matches a line like '114 tests across all modules …'"* — where it is a worked
+*example* for the `claim_pattern` regex rather than an assertion of fact. Both move to
+140: the line-120 comment because it is a claim about a gate's result, and those are
+the ones that must be true; the line-33 example because a maintainer reading it learns
+a number the README has not carried for two releases. Neither is a behaviour change,
+and `claim_pattern` itself (`'^(\d+)\s+tests\b'`) is correct and does not move.
 
 ### M8.4 `eligible_count` vs `eligible_tract_count`
 
@@ -982,9 +1232,16 @@ Both names appear in the README rewrite, adjacent, with the distinction stated.
 The drift rule has been discovered late twice. This specifies it at methodology
 time. Target: `cdfi-superpowers` at `2026.7.6` (commit `4705124`).
 
-### M9.1 Pin sites — five files, not four
+### M9.1 Pin sites — four files, six line-sites
 
-The brief says four. There are **five**:
+The brief says four **files**, and four is right; what it undercounts is *line-sites*.
+Verified against `cdfi-superpowers` at `4705124`: the `>=0.4.2` pin appears at **six**
+line-sites across **four** files — `skills/nmtc-eligibility/SKILL.md` (lines 39 and
+42), `README.md` (lines 27 and 33), `llms.txt` (line 16), and
+`references/package-index.md` (line 13) — plus two plugin-manifest CalVer entries,
+which are not the pin. The table below has five rows because it splits `SKILL.md`'s two
+sites onto separate rows and merges `README.md`'s two onto one. Every site it names
+exists; only the "five files" label was wrong:
 
 | File | Current | Becomes |
 |---|---|---|
@@ -1055,9 +1312,9 @@ twenty-third:
 | 13 | Q31 enumerates 11 resources, Native Areas absent | **Verified, from the document's own header.** But **Q32 names "NMTC Native Areas" explicitly** as one of four *Areas of Deep Distress* criteria in the CY 2024-2025 Application, so "no source exists or is coming" overstates it — the correct claim is that the Fund publishes no tract-keyed lookup while treating it as a live compliance category (§M2.3) |
 | 14 | Native Areas is an *Areas of Higher Distress* criterion (README, CHANGELOG, skill all say so) | **Mis-categorised.** FAQ Q32 places it under **Areas of Deep Distress** |
 | 15 | "all three [`_compute_eligibility` defects] are over-inclusive" | **True, but `>=` vs `>` is correct for LIC.** §45D(e)(1)(A) says "at least 20 percent," so `pr >= 0.20` must not change. Only the severe and deep poverty prongs are wrong (§M6.3) |
-| 16 | The 85% band defect described as "`is_non_metro` standing in for the 85% band" | **It is two errors, not one:** non-metro tracts get the wrong *threshold* (85% instead of 80%), and the high-migration-rural restriction is missing. 13,841 non-metro tracts vs 1,422 HMR |
+| 16 | The 85% band defect described as "`is_non_metro` standing in for the 85% band" | **It is two errors, not one:** non-metro tracts get the wrong *threshold* (85% instead of 80%), and the high-migration-rural restriction is missing. 13,841 non-metro tracts vs 1,422 HMR. The first correction of this then introduced a third error in the same direction — see §10.1, finding 24 |
 | 17 | `is_opportunity_zone` becomes `None` "otherwise" | **Needs one carve-out.** `check_tract()` on a retired 2010 GEOID returns `True` with `tract_found=False` — the OZ answer is *more* complete than the eligibility answer there, and a naive "None unless found" would destroy a correct `True` (§M1.4) |
-| 18 | The skill pins `nmtc-mapper>=0.4.2` "in four files" | **Five**, plus two plugin-manifest CalVer entries (§M9.1) |
+| 18 | The skill pins `nmtc-mapper>=0.4.2` "in four files" | **Four files is correct; six line-sites** — `SKILL.md` ×2, `README.md` ×2, `llms.txt`, `references/package-index.md` — plus two plugin-manifest CalVer entries. This document's own "five files" heading was the error, not the brief's count (§M9.1) |
 | 19 | The tri-state fix is the release's user-visible impact at 1,408 tracts | **78,039 tracts change their returned value** — 91.4% of the universe. 1,408 is only the subset where the old `False` was demonstrably wrong (§M1.4) |
 | 20 | `severe_distress=False` on a null-demographics tract is suspect | **It is not, on the live path.** The Fund publishes an explicit `NO` for all 2,750 null-demographic rows; the package reads it rather than computing it. The concern is real only on the sample path (§M3.1b) |
 | 21 | The eligibility table might omit some 2020 tracts | **It does not.** The Fund's 85,395 rows are exactly the 2020 Census Gazetteer national tract set — zero in either direction. Every one of the 1,408 misses is a GEOID that is not a 2020 tract at all, not a coverage gap (§M1.2) |
@@ -1070,6 +1327,27 @@ and C — only **four** are glob-reachable; the other **five** match no glob at 
 and are absent from the README in every form. And the brief's "140 tests" is
 correct (collection confirms 140), though `docs-check.toml`'s own comment still
 describes a "114 tests" claim.
+
+### 10.1 What this document got wrong — findings 24 to 26
+
+The table above is the *brief's* errors. This section records the document's own,
+because the same rule applies to it, and because a build reading this file needs to
+know which of its claims moved after the hostile audit. Finding 24 is the audit's;
+25 and 26 were found while executing its remedy.
+
+| # | Claim as first written | Finding |
+|---|---|---|
+| **24** | §M6.3(2)'s corrected LIC rule: `ami_lic = (ami <= 0.80) \| (hmr & (ami <= 0.85))` | **It drops a statutory conjunct.** §45D(e)(5)(A) attaches the 85% substitution to paragraph **(1)(B)(i)** — the *non-metropolitan* branch — and §45D(e)(5)(B) defines "high migration rural county" by out-migration alone, with no rurality test and no metropolitan test. A metropolitan county can meet that definition, and its tracts are governed by (1)(B)(ii), which the substitution never touches. `~metro` is restored. Found by the hostile audit **inside the document's single strongest empirical result** — the place a brief instructing the session to hunt for hidden assumptions did not point (§M6.3(2)) |
+| **25** | §M6.3(3)'s deep discriminating count: **12** | **It is 13**, and the document's own arithmetic said so — it quoted 3 disagreements under `>` and 16 under `>=`, and 16 − 3 = 13. The omitted tract is `22071980000`, dropped for a null MFI on reasoning that does not survive contact: both hypotheses predict opposite answers for it and the Fund published `NO`, so it discriminates exactly as the other twelve do (§M6.3(3)) |
+| **26** | §M1.5(b): "OZ 2.0 designations under OBBBA §70421 are expected in 2027 **on a *newer* basis again**" | **Same basis, different scheme — and the clause was uncited.** Rev. Proc. 2026-14 §3.01(3) fixes OZ 2.0 eligible-tract boundaries to those "established for the 2020 decennial census", the basis this package already uses, while Treasury's rural methodology (S4 fn.10) directs readers to the **2024 TIGER** tract map. OZ 2.0 would therefore *not* obsolete a 2010↔2020 crosswalk, so that half of ground (b) does not hold as written. Ground (a) — the 38.7% mixed-descent measurement — is load-bearing and unaffected (§M1.5b) |
+
+Two of the three are the same failure in different clothes, and it is worth naming
+because it is the one this document is structurally prone to: **a number or a clause
+carried alongside evidence that does not reach it.** The zero-disagreement fit is real
+and reaches the 80/85 split; it does not reach the non-metro conjunct. The 38.7%
+measurement is real and reaches the crosswalk exclusion; it does not reach the OZ 2.0
+sentence sitting next to it. Adjacency to strong evidence is not support, and both
+survived several passes because they were standing next to something true.
 
 ---
 
@@ -1084,8 +1362,12 @@ Stated so the audit can check the boundary rather than infer it.
   design against `TRACT_VINTAGE`, and is a feature — deferred, and named here so it
   is not mistaken for an oversight.
 - **No Island Areas file.** `NMTC_LIC_Territory_2020_December_2023.xlsx` is not
-  loaded. The 75 Island Area OZ tracts stay `None`, and the skill keeps routing
-  those addresses to CIMS.
+  loaded. The 75 Island Area OZ tracts stay `None`, and the skill keeps routing those
+  addresses to CIMS. The deferral stands for 0.5.0, but **the CHANGELOG must name it
+  for what it is**: FAQ Q32 item 4 makes *US Island Areas* one of the four Areas of
+  Deep Distress criteria (§M1.2), so this is a deferred gap in a **named federal
+  criterion**, not a coverage note about a file the package happens not to load. Those
+  are different admissions and the smaller one is not the true one.
 - **No per-row batch failure capture.** 0.6.0, with a designed contract (§M8.3a).
 - **No eligibility number moves.** §M7.
 - **No OZ 2.0.** `docs/oz2-methodology.md` is a separate decision document about
