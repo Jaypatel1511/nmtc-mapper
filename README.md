@@ -138,11 +138,29 @@ Distress levels:
 > `.xlsb` download), `severe_distress` and `deep_distress` are read **directly
 > from the Fund's own pre-computed columns** — the package does not recompute
 > them from ACS variables. The CDFI Fund's published criteria for those
-> designations are, for reference, poverty >= 30% / MFI <= 60% AMI /
-> unemployment >= 1.5x national (severe) and poverty >= 40% / MFI <= 50% AMI /
-> unemployment >= 2x national (deep). A threshold-based fallback
-> (`_compute_eligibility`) exists only for the generic CSV path and the built-in
-> synthetic sample; it is **not** used for the official file.
+> designations are, for reference, poverty **> 30%** / MFI <= 60% AMI /
+> unemployment >= 1.5x national (severe) and poverty **> 40%** / MFI
+> **<= 40%** AMI / unemployment **>= 2.5x** national (deep). Each set is OR-ed
+> internally and AND-ed with LIC. These are the workbook's own column headers,
+> verbatim — `Severe distress=LIC AND (Poverty>30%; MFI<=60%;Unemployment>=1.5)`
+> and `Deep distress=LIC AND (Poverty>40%; MFI<=40%;Unemployment>=2.5)`. The
+> deep criteria read identically in the CDFI Fund's *NMTC Compliance Monitoring
+> and Evaluation Frequently Asked Questions* (updated April 2025), **Q32**:
+> poverty rates "greater than 40%", median family income that "does not exceed
+> 40%", and "unemployment rates at least 2.5 times the national average".
+>
+> **LIC uses *at least*; distress uses *strictly greater*. That difference is
+> deliberate — do not reconcile it.** The LIC poverty prong is `>= 20%` because
+> §45D(e)(1)(A) defines it as a poverty rate "of at least 20 percent"; the
+> distress poverty prongs are `> 30%` and `> 40%` because the Fund's column
+> headers and FAQ Q32 say *greater than*. The boundary population is not
+> hypothetical: 83 LIC tracts sit at exactly 30.0% poverty and 29 at exactly
+> 40.0%. Of those qualifying on the poverty prong alone, the Fund published
+> `severe = NO` for **all 21** at 30.0% and `deep = NO` for **all 13** at 40.0%.
+>
+> A threshold-based fallback (`_compute_eligibility`) exists only for the
+> generic CSV path and the built-in synthetic sample; it is **not** used for the
+> official file.
 
 ---
 
@@ -152,6 +170,27 @@ Distress levels:
   https://www.cdfifund.gov/research-data
 - US Census Bureau Geocoding API (free, no API key required)
   https://geocoding.geo.census.gov
+
+### What the eligibility universe covers — and what it does not
+
+The CDFI Fund file holds **85,395 tracts: the 50 states, the District of
+Columbia, and Puerto Rico (981 tracts)**. It contains **no rows for American
+Samoa, Guam, the Northern Mariana Islands, or the US Virgin Islands** (state
+FIPS 60, 66, 69, 78) — 133 census tracts on 2020 geography, zero of them in the
+file.
+
+That is a gap in a **named federal criterion**, not merely a coverage boundary.
+FAQ Q32 (April 2025) enumerates "**US Island Areas**: Island Areas of the United
+States, as determined by the United States Census Bureau including Puerto Rico,
+U.S. Virgin Islands, Guam, the Commonwealth of the Northern Mariana Islands, and
+American Samoa" as item 4 of the *Areas of Deep Distress* criteria. Puerto Rico
+is named in that criterion **and** is in the file, so it is covered here like any
+state. The other four are named in the criterion and are not in the file at all.
+
+A tract in those four jurisdictions is therefore not `ineligible` — it is
+**absent from the universe**, which this package reports as
+`nmtc_eligible = None` / `distress_level = "unknown"`. Determine it against the
+CDFI Fund's CIMS tool instead.
 
 ---
 
@@ -187,11 +226,16 @@ CHANGELOG.
 
 **`is_nmtc_native_area` is always `False` — it means "not determined," not "not
 a native area."** No column in the live CDFI Fund `.xlsb` file feeds this field,
-so it is `False` for all 85,395 tracts. Native areas (Federal Indian
-Reservations, Off-Reservation Trust Lands, Hawaiian Home Lands, Alaska Native
-Village Statistical Areas) are a real NMTC *Areas of Higher Distress* criterion,
-but the CDFI Fund publishes it separately from the LIC eligibility file this
-package loads. **Pre-existing since 0.1.0**; 0.4.1 does not change it. Resolution
+so it is `False` for all 85,395 tracts. A `False` from this field carries no
+information at all: it never means the tract was checked and found not to be a
+native area. Native areas (Federal Indian Reservations, Off-Reservation Trust
+Lands, Hawaiian Home Lands, Alaska Native Village Statistical Areas) are a real
+NMTC *Areas of **Deep** Distress* criterion — item 2 of the enumeration in
+**Q32** of the CDFI Fund's *NMTC Compliance Monitoring and Evaluation Frequently
+Asked Questions* (updated April 2025). They are **not** among the eleven Areas
+of Higher Distress resources Q31 lists. The Fund publishes no tract-keyed lookup
+for the criterion, and it is absent from the LIC eligibility file this package
+loads. **Pre-existing since 0.1.0**; 0.4.1 does not change it. Resolution
 deferred to 0.5.0 — see the CHANGELOG.
 
 ---

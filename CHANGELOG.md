@@ -2,6 +2,128 @@
 
 All notable changes to nmtc-mapper are documented here.
 
+## [0.4.3] — 2026-08-09
+
+Documentation accuracy. **No logic changes — prose, comments and this file
+only.** Every `.py` file in the 0.4.3 wheel is byte-identical to its 0.4.2
+counterpart except for comment lines in `nmtcmapper/data/schema.py`; no shipped
+verdict, count or threshold moves.
+
+0.4.2 corrected three distress constants in `schema.py` and this CHANGELOG, and
+left the README asserting the superseded numbers — because the README correction
+was scheduled to a later release. The README is the long description, so those
+numbers rendered on the PyPI project page: the package's front door. This release
+removes that coupling.
+
+### Fixed
+- **The README stated four wrong values in the CDFI Fund's distress criteria,
+  not two.** The scoping everyone repeated was "MFI 50→40 and 2×→2.5×". The same
+  sentence also stated both poverty prongs with the wrong comparison.
+
+  | | README said | Now says |
+  |---|---|---|
+  | severe poverty | `>= 30%` | `> 30%` |
+  | deep poverty | `>= 40%` | `> 40%` |
+  | deep MFI | `<= 50%` AMI | `<= 40%` AMI |
+  | deep unemployment | `>= 2x` national | `>= 2.5x` national |
+
+  Authority, re-derived this release against the live workbook
+  (`3a6f5851…428772d49`, 85,395 rows) rather than relayed:
+  1. The workbook's own data-sheet headers — column 14
+     `Severe distress=LIC AND (Poverty>30%; MFI<=60%;Unemployment>=1.5)`,
+     column 15 `Deep distress=LIC AND (Poverty>40%; MFI<=40%;Unemployment>=2.5)`
+     — identical to the NOTES sheet's *Column O* / *Column P* rows.
+  2. The CDFI Fund's *NMTC Compliance Monitoring and Evaluation FAQs*
+     (cover: **UPDATED APRIL 2025**; 64 pages; SHA-256 `8d75e98a…7a0b806a`),
+     **Q32**: poverty rates *"greater than 40%"*, MFI that *"does not exceed
+     40%"*, *"unemployment rates at least 2.5 times the national average"*.
+  3. Fit against the published flags: `> 40% OR MFI <= 40% OR ratio >= 2.5`
+     mismatches on **3** of 85,395 rows; the superseded `MFI <= 50% / >= 2.0`
+     pair mismatches on **5,025**. On poverty, `>` mismatches on 20 severe /
+     3 deep and `>=` on 41 / 16.
+
+  **The three values not changed are confirmed right:** severe MFI `<= 60%`
+  (20 mismatches; the nearest alternatives 0.55 and 0.65 give 1,745 and 2,287)
+  and severe unemployment `>= 1.5x` (20; 1.25× and 1.75× give 2,083 and 1,622).
+
+- **The README now says why LIC uses *at least* and distress uses *strictly
+  greater*.** Two comparisons in one document is the kind of thing a later
+  reader "fixes" into consistency, so the reason is stated at the point of use.
+  LIC poverty stays `>= 20%` — §45D(e)(1)(A) says a poverty rate "of at least 20
+  percent", and the Fund's own column-4 header reads *"Does Census Tract Qualify
+  on Poverty Criteria>=20%?"* and flags YES on all 163 tracts at exactly 20.0%.
+  The distress prongs are strict. The boundary population is not hypothetical:
+  83 LIC tracts sit at exactly 30.0% poverty and 29 at exactly 40.0%; of those
+  qualifying on poverty alone, the Fund published `severe = NO` for **all 21**
+  and `deep = NO` for **all 13**.
+
+- **`schema.py`'s two distress comments no longer contradict each other.**
+  Line 72 read `# >= 30% poverty rate` while line 108 read `# > 40%`. Both now
+  read `# Fund criterion: > N% poverty rate`, with a block comment recording the
+  authority, the deliberate `>=` on the LIC prong above them, and the
+  `_compute_eligibility` caveat below. **No constant changed.**
+
+- **Native Areas were categorised as *Areas of Higher Distress*. They are
+  *Areas of Deep Distress*.** FAQ Q32 enumerates them as item 2 — *"NMTC Native
+  Areas: Federal Indian Reservations, Off-Reservation Trust Lands, Hawaiian Home
+  Lands, and Alaska Native Village Statistical Areas."* Q31's eleven Areas of
+  Higher Distress resources (Brownfields, HUB Zones, MUA/HPSA, ARC, DRA,
+  low-access tracts, Promise Zone, FEMA, Impacted Coal Counties, BRAC, QOZ) do
+  not include them; "Native" appears nowhere else in the FAQ's body.
+
+  **The 0.4.1 entry below is wrong in the same way and is corrected here, going
+  forward, not in place.** `CHANGELOG.md` ships inside the published 0.4.1 and
+  0.4.2 sdists, which are immutable. Editing a historical entry would silently
+  diverge this repo from artifacts PyPI is still serving. This portfolio made
+  that mistake once and reverted it.
+
+  The README also now states plainly, where it names the field, that
+  `is_nmtc_native_area` carries no information: a `False` never means "checked
+  and not a native area." Removing the field remains 0.5.0's; this release only
+  stops mis-describing it.
+
+- **US Island Areas: a gap in a named federal criterion, now disclosed.** FAQ
+  Q32 item 4 names *"US Island Areas … including Puerto Rico, U.S. Virgin
+  Islands, Guam, the Commonwealth of the Northern Mariana Islands, and American
+  Samoa"* as a Deep Distress criterion. The eligibility file covers the 50
+  states, DC and **Puerto Rico (981 tracts — named in the criterion and present
+  in the file)**, and contains **zero rows for FIPS 60 / 66 / 69 / 78** —
+  American Samoa, Guam, the Northern Marianas, the US Virgin Islands. That is
+  **133 census tracts** on 2020 geography (18 / 57 / 26 / 32, per the Census
+  2020 TIGERweb tract layer and the TIGER/Line 2020 tract files, which agree).
+  Neither the README nor this CHANGELOG had mentioned Island Areas at all; the
+  README's Data Sources section now describes the universe and this boundary.
+  Such a tract is reported `nmtc_eligible = None` / `distress_level = "unknown"`
+  — absent from the universe, not ineligible.
+
+- **`docs/eligibility.md` carried the identical wrong distress table** (`Deep |
+  >= 40% | <= 50% | >= 2x national`) and is corrected the same way. It is not
+  shipped in the sdist, but it is published to the documentation site, so fixing
+  only the README would have repeated 0.4.2's error of correcting one surface
+  and leaving another.
+
+### Recorded, not fixed
+- **`docs-check.toml:60-65` deliberately excludes prose claims**, naming "the
+  eligibility thresholds in the distress table" as unguarded. The repo knew this
+  claim was machine-unverifiable and shipped it wrong anyway. A prose-claim
+  assertion is the durable fix; it needs design and belongs to **0.5.0 or
+  later**. No gate logic is added here — new gate logic in a doc patch is scope
+  creep.
+- **Two stale "114 tests" references in `docs-check.toml`** — line 33 (a pattern
+  example) and line 120 (the claim that assertion 3 passes). The suite is
+  **140**. Comments only; the gate reads neither number.
+- **`_compute_eligibility` (`loader.py:463`, `:468`) compares poverty with `>=`
+  against both distress constants**, so the fallback is over-inclusive at
+  exactly 30.0% / 40.0% relative to the Fund's `>`. It is reachable only from
+  the synthetic sample — the official `.xlsb` path reads the published columns
+  14/15 — so no shipped verdict is affected. Correcting it is a **logic change**
+  and belongs to 0.5.0.
+- **The `cdfi-superpowers` `nmtc-eligibility` skill was checked and does *not*
+  carry the Higher/Deep mis-categorisation.** The string "Areas of Higher
+  Distress" appears nowhere in that repository, and the skill quotes no distress
+  thresholds. Recorded so the check is not repeated. Its `is_nmtc_native_area`
+  note is accurate as written.
+
 ## [0.4.2] — 2026-08-05
 
 Hotfix. The CDFI Fund re-published the eligibility file in place; every live

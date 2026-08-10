@@ -69,7 +69,28 @@ LIC_AMI_RATIO_METRO_THRESHOLD  = 0.80   # <= 80% of metro/state AMI
 LIC_AMI_RATIO_RURAL_THRESHOLD  = 0.85   # <= 85% of state AMI (high migration rural)
 
 # Severe Distress thresholds
-SEVERE_POVERTY_THRESHOLD       = 0.30   # >= 30% poverty rate
+#
+# 0.4.3, COMMENT ONLY: this block used to read "# >= 30% poverty rate" while the
+# deep block below read "# > 40%". Both describe the same kind of prong and the
+# Fund states both the same way — strictly greater. The workbook's column-14
+# header is "Poverty>30%" and column-15 is "Poverty>40%" (pinned verbatim in
+# ELIGIBILITY_XLSB_EXPECTED_HEADERS), and FAQ Q32 (April 2025) states the deep
+# criterion as "poverty rates greater than 40%".
+#
+# The LIC prong above is `>=` and MUST STAY `>=`: §45D(e)(1)(A) defines an LIC
+# by a poverty rate "of at least 20 percent". Two different comparisons in one
+# file is correct here, not a typo to reconcile. The Fund's own column-4 header
+# spells its half out — "Does Census Tract Qualify on Poverty Criteria>=20%?" —
+# and it flags YES on all 163 tracts sitting at exactly 20.0%.
+#
+# CAVEAT, recorded not fixed: `_compute_eligibility` (loader.py) compares
+# poverty with `>=` against BOTH of these constants, so the fallback is
+# marginally over-inclusive at exactly 30.0% / 40.0% relative to the Fund. It is
+# reachable only from the synthetic sample, never from the official .xlsb path
+# (severe/deep there are read from published columns 14/15), so no shipped
+# verdict is affected. Changing it is a logic change and belongs to 0.5.0, not
+# to a documentation release.
+SEVERE_POVERTY_THRESHOLD       = 0.30   # Fund criterion: > 30% poverty rate
 SEVERE_AMI_THRESHOLD           = 0.60   # <= 60% of AMI
 SEVERE_UNEMPLOYMENT_MULTIPLIER = 1.5    # >= 1.5x national unemployment rate
 
@@ -105,7 +126,7 @@ SEVERE_UNEMPLOYMENT_MULTIPLIER = 1.5    # >= 1.5x national unemployment rate
 # semicolons read as "or", confirmed by the same fit. No prong is redundant:
 # dropping the poverty term alone costs 1,183 rows, the MFI term 1,244, the
 # unemployment term 2,839.
-DEEP_POVERTY_THRESHOLD         = 0.40   # > 40% poverty rate
+DEEP_POVERTY_THRESHOLD         = 0.40   # Fund criterion: > 40% poverty rate
 DEEP_AMI_THRESHOLD             = 0.40   # <= 40% of AMI
 DEEP_UNEMPLOYMENT_MULTIPLIER   = 2.5    # >= 2.5x national unemployment rate
 
