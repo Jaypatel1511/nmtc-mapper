@@ -33,6 +33,13 @@ Homepage = "https://github.com/Jaypatel1511/nmtc-mapper"
 [tool.setuptools.packages.find]
 include = ["nmtcmapper*"]
 
+# The bundled methodology documents are .md, so packages.find alone does not
+# carry them into the wheel — setuptools puts only .py files inside a package
+# unless package-data says otherwise. MANIFEST.in carries the same path for the
+# sdist. Both are needed; neither alone ships the file in both artifacts.
+[tool.setuptools.package-data]
+"nmtcmapper.methodology" = ["*.md"]
+
 # Register the `live` marker so `@pytest.mark.live` is not an unknown-marker
 # warning, and so tests that hit the real Census/CDFI network can be deselected
 # in CI with `-m "not live"` (see .github/workflows). Deselection is NOT a skip
