@@ -240,6 +240,24 @@ deferred to 0.5.0 — see the CHANGELOG.
 
 ---
 
+## Bundled methodology
+
+Decision documents for the eligibility contract ship **inside the distribution**,
+not just in the repository, so they travel with the installed package.
+`get_methodology_path()` resolves one:
+
+    # docs-check: run methodology-path
+    from nmtcmapper import get_methodology_path
+
+    print(get_methodology_path().name)
+
+`fabricated_negatives.md` (the default) records what a `False` asserts in every
+boolean this package exposes, why `is_opportunity_zone` becomes `Optional[bool]`
+while `is_nmtc_native_area` is dropped outright, and the regression invariants
+those changes must not move.
+
+---
+
 ## Running Tests
 
     # docs-check: skip shell command; the suite is run by CI, not by this gate

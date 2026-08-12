@@ -35,5 +35,11 @@ include docs-check-denylist.txt
 recursive-include tools *.py
 recursive-include docs/README.expected *.txt
 
+# Bundled methodology documents. package-data in pyproject.toml puts these in
+# the WHEEL; this line puts them in the SDIST. A decision document that ships in
+# only one artifact is one an installer can be missing without noticing, which
+# is the same class of defect as the conftest.py omission above.
+recursive-include nmtcmapper/methodology *.md
+
 global-exclude *.pyc
 global-exclude __pycache__/*
