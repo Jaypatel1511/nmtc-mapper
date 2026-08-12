@@ -637,38 +637,43 @@ mapper.eligible_count(df)
 <tbody>
 <tr>
 <td>nmtc_eligible</td>
-<td>bool</td>
-<td>True if tract qualifies as LIC</td>
+<td>Optional[bool]</td>
+<td>True (eligible) / False (verified ineligible) / None (indeterminate — never read None as "ineligible")</td>
+</tr>
+<tr>
+<td>eligibility_status</td>
+<td>str</td>
+<td>verified-eligible / verified-ineligible / not-found / geocode-failed</td>
 </tr>
 <tr>
 <td>distress_level</td>
 <td>str</td>
-<td>deep / severe / lic / ineligible</td>
+<td>deep / severe / lic / ineligible / unknown (unknown = indeterminate)</td>
 </tr>
 <tr>
 <td>poverty_rate</td>
-<td>float</td>
-<td>Census tract poverty rate</td>
+<td>Optional[float]</td>
+<td>Census tract poverty rate (None if indeterminate)</td>
 </tr>
 <tr>
 <td>ami_ratio</td>
-<td>float</td>
-<td>MFI as pct of area median income</td>
+<td>Optional[float]</td>
+<td>MFI as pct of area median income (None if indeterminate)</td>
 </tr>
 <tr>
 <td>unemployment_rate</td>
-<td>float</td>
-<td>Census tract unemployment rate</td>
+<td>Optional[float]</td>
+<td>Census tract unemployment rate (None if indeterminate)</td>
 </tr>
 <tr>
 <td>severe_distress</td>
 <td>bool</td>
-<td>True if severe distress criteria met</td>
+<td>CDFI Fund severe-distress designation (read from the official file)</td>
 </tr>
 <tr>
 <td>deep_distress</td>
 <td>bool</td>
-<td>True if deep distress criteria met</td>
+<td>CDFI Fund deep-distress designation (read from the official file)</td>
 </tr>
 </tbody>
 </table>

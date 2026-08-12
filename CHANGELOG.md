@@ -102,6 +102,32 @@ removes that coupling.
   only the README would have repeated 0.4.2's error of correcting one surface
   and leaving another.
 
+- **The rendered documentation site served all four wrong values and was not
+  rebuilt.** Correcting `docs/eligibility.md` alone would have committed the
+  very error the bullet above names: `site/` is tracked in git, nothing
+  regenerates it, and the live pages under
+  `https://jaypatel1511.github.io/nmtc-mapper/eligibility/` still carried
+  `Deep | >= 40% | <= 50% | >= 2x national`. `mkdocs build` is run and `site/` is
+  committed here. The four values are now correct in **both**
+  `site/eligibility/index.html` and `site/search/search_index.json` — the latter
+  is a second surface again, indexed for the site's search box.
+
+  The rebuild also published two pages that had been stale since **2026-04-30**,
+  across two releases: `site/api/index.html` and `site/quickstart/index.html`
+  described `nmtc_eligible` as a plain `bool` ("NMTC eligibility flag") and omitted
+  `eligibility_status` entirely. The tri-state `Optional[bool]` contract — where
+  `None` means indeterminate and must never be read as "ineligible" — was
+  already correct in `docs/`; it had simply never been rendered.
+
+- **`docs/eligibility.md` over-attributed the severe criteria to FAQ Q32.** It
+  said both the severe and deep rows were "quoted from the … column-14 and
+  column-15 headers and restated in Q32". Q32 restates only the **deep**
+  criteria. The sentence is narrowed to match the README, which already stated
+  it correctly: the deep criteria are cited to Q32, and the severe row rests on
+  the column-14 header alone. The stronger claim — that the severe thresholds
+  appear nowhere in the FAQ's 64 pages — is not asserted here; it has been
+  reported but was not re-verified against the document this release.
+
 ### Recorded, not fixed
 - **`docs-check.toml:60-65` deliberately excludes prose claims**, naming "the
   eligibility thresholds in the distress table" as unguarded. The repo knew this
@@ -112,12 +138,48 @@ removes that coupling.
 - **Two stale "114 tests" references in `docs-check.toml`** — line 33 (a pattern
   example) and line 120 (the claim that assertion 3 passes). The suite is
   **140**. Comments only; the gate reads neither number.
-- **`_compute_eligibility` (`loader.py:463`, `:468`) compares poverty with `>=`
-  against both distress constants**, so the fallback is over-inclusive at
-  exactly 30.0% / 40.0% relative to the Fund's `>`. It is reachable only from
-  the synthetic sample — the official `.xlsb` path reads the published columns
-  14/15 — so no shipped verdict is affected. Correcting it is a **logic change**
-  and belongs to 0.5.0.
+- **`_compute_eligibility` diverges from the Fund's criteria in two ways, and
+  the `>=` one is the smaller.**
+  1. `loader.py:463`, `:468` compare poverty with `>=` against both distress
+     constants, so the fallback is over-inclusive at exactly 30.0% / 40.0%
+     relative to the Fund's `>`.
+  2. `loader.py:466`, `:471` compute `severe_distress` / `deep_distress` as the
+     OR of the three prongs with **no AND-LIC term**, while the Fund's headers
+     read `Severe distress=LIC AND (…)`. The poverty and MFI prongs imply LIC on
+     their own; the unemployment prong does not. A tract at `>= 1.5x` national
+     unemployment with poverty `< 20%` and AMI `> 80%` is therefore flagged
+     severe by the fallback and is **not** severe under the criterion.
+
+  `_compute_eligibility` exists only for the generic CSV path (`loader.py:441`)
+  and the built-in synthetic sample (`loader.py:523`); it is never reached from
+  the official `.xlsb` path, which reads the published columns 14/15. **No
+  official-path verdict is affected. A generic-CSV caller does get the
+  over-inclusive fallback.** Correcting either divergence is a **logic change**
+  and belongs to 0.5.0, where both are already scoped.
+
+- **Nothing builds or deploys `site/`.** The directory is tracked in git (51
+  files), is not gitignored, and no workflow references mkdocs or gh-pages — so a
+  generated directory sits in the repo behind no gate and drifts from its source
+  silently. That is exactly what happened: the committed build dated
+  **2026-04-30** and was stale across two releases, serving both the four wrong
+  distress values and a superseded `bool` API contract on the Quickstart and API
+  pages. This release rebuilds and commits it, which fixes the artifact but not
+  the mechanism. The durable fix is either a CI job that rebuilds and fails on
+  drift, or dropping `site/` from the repo and deploying from CI. Both are
+  infrastructure; the choice is **open**.
+  Related: nothing in the repo pins the docs toolchain. The versions used here
+  (`mkdocs==1.6.1`, `mkdocs-material==9.7.6`) were recovered from the committed
+  HTML's `generator` meta tag, which is not a contract.
+- **The Census API path `api.census.gov/data/2020/dec/pl` now returns
+  `Missing Key` unauthenticated.** Noted for whoever re-derives the 133
+  Island-Area tracts; the two artifacts used here (TIGERweb tract layer,
+  TIGER/Line 2020 tract files) needed no key.
+- **`schema.py`'s "dropping the poverty term alone costs 1,183 rows…" needed a
+  clarifying clause, now added.** The figures reproduce exactly under "rows lost
+  from the modelled set"; read instead as a change in mismatch count against the
+  published column they give 1,186 / 1,247 / 2,836, which looks like a
+  discrepancy and is not. The comment's reading is the correct one, and now says
+  so — a future auditor will likely try the other first.
 - **The `cdfi-superpowers` `nmtc-eligibility` skill was checked and does *not*
   carry the Higher/Deep mis-categorisation.** The string "Areas of Higher
   Distress" appears nowhere in that repository, and the skill quotes no distress

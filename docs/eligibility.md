@@ -26,8 +26,9 @@ A census tract qualifies if it meets ANY of the following:
 
 The severe and deep rows are OR-ed internally and AND-ed with LIC. They are the
 CDFI Fund's criteria, quoted from the eligibility workbook's own column-14 and
-column-15 headers and restated in Q32 of the Fund's *NMTC Compliance Monitoring
-and Evaluation Frequently Asked Questions* (updated April 2025).
+column-15 headers. The **deep** criteria read identically in Q32 of the Fund's
+*NMTC Compliance Monitoring and Evaluation Frequently Asked Questions* (updated
+April 2025). The severe row rests on the column-14 header alone.
 
 Note the poverty column changes comparison between rows, and that is correct:
 LIC is **at least** 20% (§45D(e)(1)(A) — "a poverty rate of at least 20

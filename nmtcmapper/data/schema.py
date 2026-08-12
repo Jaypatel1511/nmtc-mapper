@@ -83,13 +83,23 @@ LIC_AMI_RATIO_RURAL_THRESHOLD  = 0.85   # <= 85% of state AMI (high migration ru
 # spells its half out — "Does Census Tract Qualify on Poverty Criteria>=20%?" —
 # and it flags YES on all 163 tracts sitting at exactly 20.0%.
 #
-# CAVEAT, recorded not fixed: `_compute_eligibility` (loader.py) compares
-# poverty with `>=` against BOTH of these constants, so the fallback is
-# marginally over-inclusive at exactly 30.0% / 40.0% relative to the Fund. It is
-# reachable only from the synthetic sample, never from the official .xlsb path
-# (severe/deep there are read from published columns 14/15), so no shipped
-# verdict is affected. Changing it is a logic change and belongs to 0.5.0, not
-# to a documentation release.
+# CAVEAT, recorded not fixed: `_compute_eligibility` (loader.py) diverges from
+# the Fund's criteria in two ways, and the second is the larger one.
+#
+#   1. It compares poverty with `>=` against BOTH of these constants, so the
+#      fallback is marginally over-inclusive at exactly 30.0% / 40.0%.
+#   2. It computes severe_distress / deep_distress as the OR of the three prongs
+#      with NO AND-LIC term (loader.py:466, :471), while the Fund's headers read
+#      `Severe distress=LIC AND (...)`. The poverty and MFI prongs imply LIC on
+#      their own; the unemployment prong does not. So a tract at >= 1.5x national
+#      unemployment with poverty < 20% and AMI > 80% is flagged severe by the
+#      fallback and is NOT severe under the criterion.
+#
+# `_compute_eligibility` exists only for the generic CSV path and the built-in
+# synthetic sample; it is never reached from the official .xlsb path (severe/deep
+# there are read from published columns 14/15), so no official-path verdict is
+# affected. A generic-CSV caller DOES get the over-inclusive fallback. Changing
+# it is a logic change and belongs to 0.5.0, not to a documentation release.
 SEVERE_POVERTY_THRESHOLD       = 0.30   # Fund criterion: > 30% poverty rate
 SEVERE_AMI_THRESHOLD           = 0.60   # <= 60% of AMI
 SEVERE_UNEMPLOYMENT_MULTIPLIER = 1.5    # >= 1.5x national unemployment rate
@@ -125,7 +135,10 @@ SEVERE_UNEMPLOYMENT_MULTIPLIER = 1.5    # >= 1.5x national unemployment rate
 # Note the criteria are OR-ed with each other and AND-ed with LIC — the header's
 # semicolons read as "or", confirmed by the same fit. No prong is redundant:
 # dropping the poverty term alone costs 1,183 rows, the MFI term 1,244, the
-# unemployment term 2,839.
+# unemployment term 2,839. These are rows LOST FROM THE MODELLED SET (rows the
+# three-prong model flags that the two-prong model does not), not the change in
+# mismatch count against the published column; read the latter way the same drops
+# give 1,186 / 1,247 / 2,836, which is a different quantity and not a discrepancy.
 DEEP_POVERTY_THRESHOLD         = 0.40   # Fund criterion: > 40% poverty rate
 DEEP_AMI_THRESHOLD             = 0.40   # <= 40% of AMI
 DEEP_UNEMPLOYMENT_MULTIPLIER   = 2.5    # >= 2.5x national unemployment rate

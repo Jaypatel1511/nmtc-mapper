@@ -682,33 +682,43 @@ mapper = NMTCMapper(force_reload=False)
 <tbody>
 <tr>
 <td>nmtc_eligible</td>
-<td>bool</td>
-<td>NMTC eligibility flag</td>
+<td>Optional[bool]</td>
+<td>Tri-state: True / False / None (None = indeterminate, never falsy "ineligible")</td>
+</tr>
+<tr>
+<td>eligibility_status</td>
+<td>str</td>
+<td>verified-eligible / verified-ineligible / not-found / geocode-failed</td>
 </tr>
 <tr>
 <td>distress_level</td>
 <td>str</td>
-<td>deep/severe/lic/ineligible</td>
+<td>deep / severe / lic / ineligible / unknown</td>
 </tr>
 <tr>
 <td>tract_id</td>
-<td>str</td>
-<td>11-digit FIPS code</td>
+<td>Optional[str]</td>
+<td>11-digit FIPS code (None if no tract resolved)</td>
 </tr>
 <tr>
 <td>poverty_rate</td>
-<td>float</td>
-<td>Tract poverty rate</td>
+<td>Optional[float]</td>
+<td>Tract poverty rate (None if indeterminate)</td>
 </tr>
 <tr>
 <td>ami_ratio</td>
-<td>float</td>
-<td>MFI/AMI ratio</td>
+<td>Optional[float]</td>
+<td>MFI/AMI ratio (None if indeterminate)</td>
 </tr>
 <tr>
 <td>geocode_success</td>
 <td>bool</td>
 <td>Whether geocoding succeeded</td>
+</tr>
+<tr>
+<td>tract_found</td>
+<td>bool</td>
+<td>Whether the tract was present in the eligibility universe</td>
 </tr>
 </tbody>
 </table>
