@@ -61,6 +61,19 @@ def test_oz_tract_count_positive(mapper):
 
 
 def test_check_tract_has_oz_flag(mapper):
+    """0.5.0: is_opportunity_zone is Optional[bool] — True or None, NEVER False.
+
+    This assertion was `isinstance(..., bool)` through 0.4.3 and is the in-repo
+    tripwire §M5.2 names for the upgrade. It passed only because this particular
+    sample tract IS designated; the contract it asserted was already the wrong
+    one for the 78,039 tracts that are not."""
     result = mapper.check_tract("17031840100")
     assert hasattr(result, "is_opportunity_zone")
-    assert isinstance(result.is_opportunity_zone, bool)
+    assert result.is_opportunity_zone is True
+    assert result.opportunity_zone_status == "designated"
+
+    # A tract that is not designated is None, not False.
+    other = mapper.check_tract("17031010100")
+    assert other.is_opportunity_zone is None
+    assert other.is_opportunity_zone is not False
+    assert other.opportunity_zone_status == "not-confirmed"

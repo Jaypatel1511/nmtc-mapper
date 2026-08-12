@@ -21,8 +21,8 @@ def _result(**over):
         address="x", tract_id="17031030604", nmtc_eligible=False,
         distress_level="ineligible", poverty_rate=0.197, ami_ratio=0.9127,
         unemployment_rate=0.017, is_non_metro=False, is_high_migration_rural=False,
-        is_nmtc_native_area=False, severe_distress=False, deep_distress=False,
-        geocode_success=True, is_opportunity_zone=False, tract_found=True,
+        severe_distress=False, deep_distress=False,
+        geocode_success=True, is_opportunity_zone=None, tract_found=True,
     )
     base.update(over)
     return EligibilityResult(**base)
@@ -32,7 +32,9 @@ def _result(**over):
 
 def test_summary_indeterminate_not_rendered_as_no(capsys):
     r = _result(nmtc_eligible=None, distress_level="unknown",
-                tract_found=False, geocode_success=False,
+                tract_id=None, tract_found=False, geocode_success=False,
+                is_non_metro=None, is_high_migration_rural=None,
+                severe_distress=None, deep_distress=None,
                 poverty_rate=None, ami_ratio=None, unemployment_rate=None)
     r.summary()
     out = capsys.readouterr().out

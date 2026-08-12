@@ -2,6 +2,245 @@
 
 All notable changes to nmtc-mapper are documented here.
 
+## [0.5.0] — unreleased
+
+**The fabricated-negative release.** 0.4.0 built a tri-state contract for the
+verdict and left its neighbours fabricating inside the very branches it was
+written to protect. `check_tract()`'s lookup miss and `check_address()`'s geocode
+no-match set six booleans to a confident `False` on a tract that was never read.
+
+The decision document is `nmtcmapper/methodology/fabricated_negatives.md`, which
+ships in both the wheel and the sdist; `nmtcmapper.get_methodology_path()`
+resolves it from site-packages.
+
+**No eligibility number moves.** This is a contract release, not a data release:
+85,395 tracts · 35,335 eligible · `{ineligible: 50060, lic: 14153, severe: 13121,
+deep: 8061}` · 8,764 OZ designations, all re-derived against the live workbook.
+
+---
+
+### UPGRADING FROM 0.4.3 — READ THIS FIRST
+
+`bool → Optional[bool]` is a breaking change that does not break loudly. `None`
+is falsy, so `if result.is_opportunity_zone:` keeps running and starts meaning
+something else, while `is False` silently stops matching. **That is precisely the
+class of defect this package exists to close, introduced by the fix for it.** It
+cannot be avoided — the alternative is keeping the fabrication — so it is
+enumerated here instead.
+
+**Silent — your code keeps running, the meaning changes:**
+
+| Call shape | Did | Does | Write instead |
+|---|---|---|---|
+| `if r.is_opportunity_zone:` | True for 7,356 tracts | Same rows | Safe. Still means "designated" |
+| `if not r.is_opportunity_zone:` | "not an OZ" | "not confirmed" — **78,039 tracts** | `if r.opportunity_zone_status == "not-confirmed":` |
+| `r.is_opportunity_zone is False` | matched 78,039 tracts | **matches nothing, ever** | `r.opportunity_zone_status != "designated"` |
+| `str(r.is_opportunity_zone)` | `"False"` | `"None"` | `r.opportunity_zone_status` |
+| `df["is_non_metro"] == False` (after `.enrich()`) | matched metro **and** unresolved rows | matches only rows actually read as `Metro` | Intended. To restore the old set: `df["is_non_metro"] != True` |
+| `df[~df["severe_distress"]]` | included indeterminate rows as "not severe" | `~None` on object dtype → `TypeError` | `df["severe_distress"] != True` |
+| `bool(r.severe_distress)` on an absent tract | `False` | `False` (from `None`) — same value, different meaning | Check `r.eligibility_status` first |
+
+**Loud — your code raises, which is the good case:**
+
+| Call shape | New behaviour |
+|---|---|
+| `r.is_nmtc_native_area` | `AttributeError` |
+| `EligibilityResult(..., is_nmtc_native_area=False)` | `TypeError: unexpected keyword argument` |
+| `df["is_nmtc_native_area"]` after `.enrich()` | `KeyError` |
+| `sum(r.is_opportunity_zone for r in results)` | `TypeError: unsupported operand type(s) for +: 'int' and 'NoneType'` |
+| `int(r.is_opportunity_zone)` | `TypeError` |
+| `assert isinstance(r.is_opportunity_zone, bool)` | `AssertionError` |
+
+**Not changing** — stated so nobody upgrades defensively against it:
+`nmtc_eligible`, `eligibility_status`, `distress_level`, `tract_found`,
+`geocode_success`, all three metrics, `distress_description`, `data_source`,
+`tract_count`, `oz_tract_count`, `eligible_tract_count`, and every eligibility
+number above.
+
+---
+
+### Changed
+
+- **`is_opportunity_zone` is `Optional[bool]` — `True` or `None`, never `False`.**
+  The 2018 designations are 2010-tract-based; this package's table and geocoder
+  are 2020-basis. 1,408 of the 8,764 designations (16.07%) have no row in the
+  2020-basis table, so **a genuine non-designation and a vintage miss are the
+  same observation** without a crosswalk. The headline is not the 1,408: **78,039
+  of 85,395 tracts (91.4%) change their returned value**, because every non-match
+  becomes `None`. 1,408 is only the subset where the old `False` was demonstrably
+  wrong rather than merely unsupportable.
+
+  The partition after this change, re-derived: **7,356 `True` + 78,039 `None` =
+  85,395, with `is False` occurring zero times on every path.**
+
+  **The membership test is keyed on the designation set, NOT on `tract_found`.**
+  A caller passing one of the 1,408 retired 2010 GEOIDs directly still gets a
+  correct `True` alongside `tract_found=False` — verified on `01003011502`,
+  `01007010002` and `60010950100`. It is the one place the OZ answer is more
+  complete than the eligibility answer, and a naive "None unless found" rule
+  would have destroyed it.
+
+  **No crosswalk ships.** The 1,408 have 3,447 distinct 2020 successors, and
+  **1,299 of the 3,356 that are in the table (38.7%) also contain territory from
+  2010 tracts that were never designated.** Marking those `True` would assert a
+  designation that was never made. Symmetrically, 2,511 tracts not on the
+  designation list draw at least half their land from designated 2010 territory —
+  under a crosswalk, a land-share threshold rather than the statute would decide
+  whether a deal's tract "is" an OZ. The CDFI Fund's own *2016-2020 ACS Data FAQ*
+  Q10 routes this question to the Census relationship files and to CIMS.
+
+- **`is_non_metro`, `is_high_migration_rural`, `severe_distress` and
+  `deep_distress` are `Optional[bool]`, and are `None` on the two indeterminate
+  branches only.** **A found tract's `False` is unchanged** and remains fully
+  supportable: it is the Fund's published `NO`, and all five source columns are
+  strict `YES`/`NO` across all 85,395 rows with zero blanks — including the 2,750
+  rows with null demographics, for which the Fund still published a
+  determination. The remedy is per-observation, not per-field.
+
+- **New: `opportunity_zone_status`**, a read-only property parallel to
+  `eligibility_status`, with three values — `"designated"`, `"not-confirmed"`,
+  `"no-tract"`. Three, not four: the reasons behind `not-confirmed` (not
+  designated / vintage miss / Island Area outside this table) are exactly what
+  the package cannot distinguish, so enumerating them would re-introduce the
+  fabrication in string form. **`summary()` switches on this property, never on
+  the truthiness of the field** — which structurally prevents the ternary trap
+  from returning.
+
+- **`summary()` renders three states per tri-state field, with the qualifier
+  inline.** `None` is falsy, so the old `{'Yes' if self.is_opportunity_zone else
+  'No'}` would have kept printing `No` after the type was fixed — and the
+  rendered block is what a user pastes into a memo. The qualifier is inline on
+  the same line for **all three** states, including `True`: 527 of the 7,356
+  matched GEOIDs (7.2%) are 2020 tracts drawing under 99% of their land from the
+  same-numbered 2010 tract, and the worst, `42063961102`, draws 12.4%. A footer
+  is what gets dropped when one line is copied out, and the `True` line is the
+  one most likely to be copied.
+
+  ```
+    Opportunity Zone: ✅ YES — GEOID is on the Dec-2018 designation list, which is
+                      2010-tract-based (a claim about the list, not about the parcel)
+    Opportunity Zone: ❓ NOT CONFIRMED — not on the 2018 designation list, which is
+                      2010-tract-based (indeterminate, NOT "not an Opportunity Zone")
+    Opportunity Zone: ❓ UNKNOWN — no census tract resolved
+    Non-Metro:        ❓ UNKNOWN — tract not read
+    High Migration:   ❓ UNKNOWN — tract not read
+  ```
+
+- **`_compute_eligibility()` — three structural defects corrected, all
+  over-inclusive.** It backs `load_sample_table()` / `from_sample()` only, but it
+  is exported, it teaches a rule, and its output is what a demo shows.
+
+  1. **No `AND LIC` conjunction on severe/deep.** The Fund's own column headers
+     read `Severe distress=LIC AND (…)`: distress is a tier *within* eligibility,
+     never a route into it. Feeding the Fund's metric columns through the shipped
+     rule, **5,197 of the live 85,395 rows were flagged severe or deep while not
+     LIC — 100% of them carried by the unemployment prong alone** (poverty 0, MFI
+     0), because poverty `>= 30%` implies `>= 20%` and MFI `<= 60%` implies
+     `<= 80%`, so only unemployment can fire outside LIC. `deep ⊆ severe` under
+     this rule, so the union *is* the severe count: 5,197 severe / 751 deep.
+     **After the fix: 0.**
+  2. **`is_non_metro` stood in for the high-migration-rural 85% band.**
+     §45D(e)(1)(B) sets the income test at 80% for every tract; the 85% figure
+     comes only from §45D(e)(5)(A), which attaches the substitution to paragraph
+     **(1)(B)(i)** — the non-metropolitan branch — and §45D(e)(5)(B) defines "high
+     migration rural county" by out-migration alone, with no rurality and no
+     metro test. A metropolitan county can meet that definition, and its tracts
+     are governed by (1)(B)(ii), which the substitution never touches. The band
+     therefore requires `hmr & ~metro`. The shipped rule granted LIC to **932
+     tracts on non-metro status alone**; the corrected rule reproduces the Fund's
+     published column C **exactly — 0 disagreements across all 85,395 rows**.
+     On the current file all 1,422 HMR tracts are non-metro, so the non-metro
+     conjunct is redundant as an **empirical property of one published file, not
+     a logical one** — which is exactly why it is written out. A test asserts the
+     metro-HMR count is 0 and will fail loudly the day the Fund publishes one.
+  3. **`>` vs `>=` on the distress poverty prongs.** The Fund publishes strictly
+     greater (`Poverty>30%`, `Poverty>40%`; April 2025 Compliance FAQ Q32). Of
+     the LIC tracts at exactly 30.0% qualifying on poverty alone the Fund
+     published `severe = NO` for **all 21**, and at exactly 40.0% `deep = NO` for
+     **all 13**. **The LIC prong stays `>=`** — §45D(e)(1)(A) says "at least".
+
+  **The missing conjunct reached the user-visible label, not just the two boolean
+  columns.** `distress_label` tests deep, then severe, and only then
+  `nmtc_eligible`, so a `True` in either distress column short-circuited before
+  the LIC check was consulted: **4,446 rows rendered `distress_level="severe"`
+  and 751 `"deep"` while not LIC.** AND-ing LIC into the two columns repairs the
+  label as a side effect — confirmed by execution, 0 rows remaining, not assumed.
+
+  **The 12-tract synthetic sample table is unchanged by all three corrections** —
+  re-derived row by row, **0 of 12** classifications move. No sample tract sits at
+  exactly 30.0% or 40.0% poverty, every sample tract flagged severe or deep is
+  already LIC on the poverty or MFI prong, and no sample tract falls in the
+  (80%, 85%] MFI band. (The methodology predicted these values would move and
+  instructed the build to re-derive rather than assume; they did not.)
+
+### Added
+
+- **Cell-value allowlists on all five categorical source columns**, matched after
+  the existing `.strip().upper()` normalisation, raising `EligibilitySchemaError`
+  naming the column, the offending value and the row index.
+
+  `is_non_metro` parsed as `!= "METRO"`, so any unrecognised value silently
+  became `True`; columns C/N/O/P test `== "YES"`, so any unrecognised value
+  silently became `False` — `'Y'` parsed to `False`, which is the
+  fabricated-negative direction this release exists to close. **The header guard
+  cannot see either**: it pins header *strings*, not cell *vocabularies*, so a
+  re-publish that leaves every header byte-identical and rewrites one cell from
+  `YES` to `Y` passes it completely — and the July-2026 in-place re-publish is
+  standing proof that this Fund edits this file at the same URL.
+
+  `{"METRO", "NON-METRO"}` for column 1, `{"YES", "NO"}` for columns C, N, O and
+  P. **Zero rows affected on the live file** and no invariant moves.
+
+  The methodology scoped this to four columns — column 1 plus N/O/P. **Column C,
+  the LIC verdict itself, is guarded here too**: it has exactly the same
+  `== "YES"` parse and exactly the same silent-`False` failure mode, in the
+  column that decides eligibility. Guarding four and leaving the fifth would have
+  hardened everything except the verdict.
+
+### Removed
+
+- **`is_nmtc_native_area` is dropped**, not made tri-state. **Tri-state where a
+  positive is obtainable; drop where it never is.** No value was ever obtainable:
+  the CDFI Fund publishes no tract-keyed NMTC native-area resource (April 2025
+  Compliance FAQ **Q31** enumerates eleven Areas-of-Higher-Distress resources and
+  Native Areas is not among them), and the four AIANNH classes carry four-digit
+  Census codes with **no state or county component**, so they cannot nest into
+  `SSCCCTTTTTT` — the Navajo Nation spans three states. Establishing the status
+  is a polygon intersection, not a table join.
+
+  The criterion is live — FAQ **Q32** names *NMTC Native Areas* as one of four
+  **Areas of Deep Distress** criteria — and the Fund performs tract-keyed
+  native-area qualification for *other* programs (CIMS layers 38/39, Native
+  American BEA/IA Qualifying Tract) but publishes no NMTC member. The field is
+  removed because the package cannot compute it, not because the criterion is
+  unimportant; if the Fund publishes a tract-keyed file it returns as a real
+  field with real `True` values.
+
+  **Dropping fails loud** (`AttributeError` / `TypeError` / `KeyError`) where a
+  tri-state would fail silent. Where a field carries no information at all, the
+  loud failure is the feature.
+
+- **`_process_eligibility_table()` and `ELIGIBILITY_FILE_COLUMNS` deleted as
+  structurally unreachable dead code**, along with the `else` branch at the
+  parser fork, the import that fed it, and the back-reference in `schema.py`.
+  `path` reaches the parser only from `download_eligibility_file()`, which returns
+  only `CACHE_DIR / ELIGIBILITY_CACHE_FILENAME`, and that filename is a module
+  constant ending `.xlsb` — so `path.suffix != ".xlsb"` could never be true.
+
+  Re-confirmed by execution before the cut, not relayed: **0 calls on an
+  unmodified package**; reachable only after rebinding **two** module-private
+  names; and a literal `.csv` raises `EligibilityParseError`, because the branch
+  called `pd.read_excel` and could not have read CSV even then. The dict also
+  carried `"NATIVE_AREA": "is_nmtc_native_area"` — **the only mapping anywhere in
+  this package that could ever have set that field `True`** — which is why it went
+  with the field rather than being left behind to suggest a source.
+
+  Note for maintainers: three sites shipped in 0.4.3 describe this branch as a
+  live "generic CSV path". They are wrong on reachability and are corrected in a
+  separate documentation pass; the CHANGELOG text at `[0.4.2]` below ships inside
+  the published 0.4.2/0.4.3 sdists and is therefore **corrected forward here, not
+  edited in place**.
+
 ## [0.4.3] — 2026-08-09
 
 Documentation accuracy. **No logic changes — prose, comments and this file

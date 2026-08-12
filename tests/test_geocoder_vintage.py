@@ -100,7 +100,7 @@ def _table(*eligible_tracts: str) -> pd.DataFrame:
             "tract_id": tid, "nmtc_eligible": True, "distress_level": "lic",
             "poverty_rate": 0.25, "ami_ratio": 0.70, "unemployment_rate": 0.08,
             "is_non_metro": False, "is_high_migration_rural": False,
-            "is_nmtc_native_area": False, "severe_distress": False,
+            "severe_distress": False,
             "deep_distress": False,
         })
     return pd.DataFrame(recs).set_index("tract_id")

@@ -71,10 +71,20 @@ def test_affluent_tract_not_eligible():
     assert result["nmtc_eligible"].iloc[0] == False
 
 
-def test_sample_table_has_native_area_field():
+def test_sample_table_has_no_native_area_field():
+    """0.5.0 DROPPED is_nmtc_native_area rather than making it tri-state.
+
+    No value was ever obtainable: the CDFI Fund publishes no tract-keyed NMTC
+    native-area resource, and AIANNH entities carry four-digit GEOIDs with no
+    state or county component, so they cannot nest into SSCCCTTTTTT at all. A
+    field that can only ever say "I don't know" invites a consumer to read the
+    absence of True as meaningful. Dropping it fails LOUD (KeyError here,
+    AttributeError/TypeError on EligibilityResult) where a tri-state would fail
+    silent."""
     df = _build_sample_table()
-    assert "is_nmtc_native_area" in df.columns
-    assert df["is_nmtc_native_area"].isin([True, False]).all()
+    assert "is_nmtc_native_area" not in df.columns
+    with pytest.raises(KeyError):
+        df["is_nmtc_native_area"]
 
 
 def test_deep_distress_classified():

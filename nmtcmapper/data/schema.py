@@ -83,23 +83,33 @@ LIC_AMI_RATIO_RURAL_THRESHOLD  = 0.85   # <= 85% of state AMI (high migration ru
 # spells its half out — "Does Census Tract Qualify on Poverty Criteria>=20%?" —
 # and it flags YES on all 163 tracts sitting at exactly 20.0%.
 #
-# CAVEAT, recorded not fixed: `_compute_eligibility` (loader.py) diverges from
-# the Fund's criteria in two ways, and the second is the larger one.
+# CORRECTED IN 0.5.0. Through 0.4.3 `_compute_eligibility` (loader.py) diverged
+# from the Fund's criteria in two ways, and the second was the larger one.
 #
-#   1. It compares poverty with `>=` against BOTH of these constants, so the
-#      fallback is marginally over-inclusive at exactly 30.0% / 40.0%.
-#   2. It computes severe_distress / deep_distress as the OR of the three prongs
-#      with NO AND-LIC term (loader.py:466, :471), while the Fund's headers read
+#   1. It compared poverty with `>=` against BOTH of these constants, so it was
+#      marginally over-inclusive at exactly 30.0% / 40.0%.
+#   2. It computed severe_distress / deep_distress as the OR of the three prongs
+#      with NO AND-LIC term, while the Fund's headers read
 #      `Severe distress=LIC AND (...)`. The poverty and MFI prongs imply LIC on
 #      their own; the unemployment prong does not. So a tract at >= 1.5x national
-#      unemployment with poverty < 20% and AMI > 80% is flagged severe by the
-#      fallback and is NOT severe under the criterion.
+#      unemployment with poverty < 20% and AMI > 80% was flagged severe and is
+#      NOT severe under the criterion. Measured by feeding the Fund's own metric
+#      columns through the shipped rule: 5,197 of the live 85,395 rows were
+#      flagged severe or deep while NOT LIC, and every one of them was carried by
+#      the unemployment prong alone — poverty 0, MFI 0. That 100% is the
+#      structural argument as a measurement: poverty >= 30% implies poverty >=
+#      20%, and MFI <= 60% implies MFI <= 80%, so those two prongs cannot fire
+#      outside LIC. Unemployment is the only prong with no LIC implication.
 #
-# `_compute_eligibility` exists only for the generic CSV path and the built-in
-# synthetic sample; it is never reached from the official .xlsb path (severe/deep
-# there are read from published columns 14/15), so no official-path verdict is
-# affected. A generic-CSV caller DOES get the over-inclusive fallback. Changing
-# it is a logic change and belongs to 0.5.0, not to a documentation release.
+# 0.5.0 applies `> 30%` / `> 40%` on the two DISTRESS poverty prongs (the LIC
+# prong stays `>=`, per the paragraph above) and AND-s LIC into both distress
+# columns. That also repairs `distress_level`, which tested deep, then severe,
+# and only then nmtc_eligible — so a True in either distress column
+# short-circuited before the LIC check was ever consulted.
+#
+# NO OFFICIAL-PATH VERDICT WAS EVER AFFECTED, before or after: severe/deep on the
+# .xlsb path are read from the Fund's published columns 14/15 and are never
+# computed here.
 SEVERE_POVERTY_THRESHOLD       = 0.30   # Fund criterion: > 30% poverty rate
 SEVERE_AMI_THRESHOLD           = 0.60   # <= 60% of AMI
 SEVERE_UNEMPLOYMENT_MULTIPLIER = 1.5    # >= 1.5x national unemployment rate
@@ -157,23 +167,22 @@ DEEP_UNEMPLOYMENT_MULTIPLIER   = 2.5    # >= 2.5x national unemployment rate
 # 5.7% raised the bar on every unemployment-prong distress comparison.
 NATIONAL_UNEMPLOYMENT_RATE     = 0.054  # 5.4%
 
-# ── CDFI Fund Eligibility File Column Mappings ────────────────────────────────
-# Source: 2016-2020 ACS Low-Income Community Eligibility file from cdfifund.gov
-
-ELIGIBILITY_FILE_COLUMNS = {
-    "GEOID":                    "tract_id",
-    "STATE":                    "state",
-    "COUNTY":                   "county",
-    "TRACT":                    "tract",
-    "POVERTY_RATE":             "poverty_rate",
-    "MFI_RATIO":                "ami_ratio",
-    "UNEMPLOYMENT_RATE":        "unemployment_rate",
-    "NON_METRO":                "is_non_metro",
-    "HIGH_MIGRATION_RURAL":     "is_high_migration_rural",
-    "LIC_ELIGIBLE":             "lic_eligible_raw",
-    "SEVERE_DISTRESS":          "severe_distress_raw",
-    "NATIVE_AREA":              "is_nmtc_native_area",
-}
+# ── CDFI Fund Eligibility File Column Mappings — REMOVED IN 0.5.0 ────────────
+# `ELIGIBILITY_FILE_COLUMNS` described the retired .xlsx source and was consumed
+# only by `_process_eligibility_table()`, which 0.5.0 deletes as structurally
+# unreachable dead code: `path` reaches the parser only from
+# `download_eligibility_file()`, which returns only
+# `CACHE_DIR / ELIGIBILITY_CACHE_FILENAME`, and that filename is a module
+# constant ending `.xlsb` — so the `path.suffix != ".xlsb"` branch could never
+# fire. Re-confirmed by execution before deletion: 0 calls on an unmodified
+# package, reachable only after rebinding two module-private names, and a literal
+# .csv raises EligibilityParseError because the branch called `pd.read_excel`.
+#
+# The dict also carried `"NATIVE_AREA": "is_nmtc_native_area"` — the only mapping
+# anywhere in this package that could ever have set `is_nmtc_native_area=True`.
+# That field is dropped in 0.5.0 (no CDFI Fund tract-keyed native-area source
+# exists for NMTC), and the mapping went with it rather than being left behind to
+# suggest a source that was never reachable.
 
 # ── Opportunity Zone Data ────────────────────────────────────────────────────
 # Source: CDFI Fund "List of designated Qualified Opportunity Zones"
@@ -197,9 +206,10 @@ CDFI_FUND_LIC_URL_2020 = (
 # ── Live .xlsb structure (Aug-2025b release) — schema validation (0.4.0) ──────
 # The live loader binds columns POSITIONALLY and skips the header blind, so an
 # upstream column re-order/rename or a degenerate parse would be read silently
-# against the wrong fields. These constants — verified against the live file, NOT
-# copied from ELIGIBILITY_FILE_COLUMNS (which describes the retired .xlsx path) —
-# let the loader validate structure before it trusts any row.
+# against the wrong fields. These constants are verified against the live file —
+# they were never copied from the retired .xlsx path's column mapping, which
+# 0.5.0 deleted with the dead branch that consumed it — and they let the loader
+# validate structure before it trusts any row.
 ELIGIBILITY_XLSB_SHEET = "2016-2020"
 ELIGIBILITY_XLSB_COLUMN_COUNT = 16
 
@@ -265,6 +275,38 @@ ELIGIBILITY_VALUE_BOUNDS = {
     "poverty_rate":      (0.0, 1.0),
     "unemployment_rate": (0.0, 1.0),
     "ami_ratio":         (0.0, 10.0),
+}
+
+# ── Categorical cell-value allowlists (0.5.0) ────────────────────────────────
+# THE HEADER GUARD PINS HEADER STRINGS, NOT CELL VOCABULARIES. A re-publish that
+# leaves every header byte-identical and changes one cell from `YES` to `Y`
+# passes ELIGIBILITY_XLSB_EXPECTED_HEADERS completely — and the July-2026
+# in-place re-publish is standing proof that this Fund edits this file at the same
+# URL without renaming it. These allowlists are the only guard that can see a
+# value-level change.
+#
+# Direction is why all five categorical columns are guarded rather than one.
+# Column 1 parsed as `!= "METRO"`, so an unrecognized value silently became
+# `True` — over-inclusive. Columns 2, 13, 14 and 15 parse as `== "YES"`, so an
+# unrecognized value silently became `False`: `'Y'` parsed to `False`. That is
+# the FABRICATED-NEGATIVE direction, which is the defect 0.5.0 exists to close,
+# and column 2 is the LIC verdict itself.
+#
+# Matched AFTER the loader's existing `.strip().upper()` normalization. Zero rows
+# are affected on the live file: all five columns are strict binaries with no
+# blanks and no third value across all 85,395 rows (Metro/Non-metro 71,554 /
+# 13,841; col C 50,060 NO / 35,335 YES; col N 83,973 / 1,422; col O 64,213 /
+# 21,182; col P 77,334 / 8,061).
+ELIGIBILITY_METRO_ALLOWED = frozenset({"METRO", "NON-METRO"})
+ELIGIBILITY_YESNO_ALLOWED = frozenset({"YES", "NO"})
+
+# Column index -> (human label for the error message, allowed value set).
+ELIGIBILITY_XLSB_VALUE_ALLOWLISTS = {
+    1:  ("1 (OMB Metro/Non-metro Designation)",        ELIGIBILITY_METRO_ALLOWED),
+    2:  ("C (LIC eligibility)",                        ELIGIBILITY_YESNO_ALLOWED),
+    13: ("N (High Migration Rural County LIC)",        ELIGIBILITY_YESNO_ALLOWED),
+    14: ("O (Severe distress)",                        ELIGIBILITY_YESNO_ALLOWED),
+    15: ("P (Deep distress)",                          ELIGIBILITY_YESNO_ALLOWED),
 }
 
 # ── Cache ─────────────────────────────────────────────────────────────────────

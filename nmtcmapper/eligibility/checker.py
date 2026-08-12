@@ -8,6 +8,19 @@ import pandas as pd
 from nmtcmapper.data.schema import DISTRESS_LEVELS
 
 
+def _tri(value: Optional[bool]) -> str:
+    """Render a tri-state boolean for summary() — three branches, never a ternary.
+
+    `None` is falsy, so any `'Yes' if x else 'No'` on a tri-state field prints a
+    fabricated `No` for a tract the package never read. The qualifier is inline.
+    """
+    if value is None:
+        return "❓ UNKNOWN — tract not read"
+    if value:
+        return "Yes"
+    return "No"
+
+
 @dataclass
 class EligibilityResult:
     """Result of a single address NMTC eligibility check.
@@ -17,6 +30,33 @@ class EligibilityResult:
     (INDETERMINATE — geocode no-match, or the tract is absent from the ~85k
     universe). None must never be read as a falsy "ineligible": see
     ``eligibility_status`` and ``summary()``.
+
+    0.5.0 EXTENDS THAT CONTRACT TO EVERY BOOLEAN THAT CAN BE UNOBTAINABLE.
+    0.4.0 made the verdict tri-state and left its neighbours fabricating inside
+    the very branches written to protect it: the tract-absent branch of
+    ``check_tract()`` and the geocode-no-match branch of ``check_address()`` set
+    six booleans to a confident ``False`` about a tract no row was ever read for.
+
+    - ``is_non_metro``, ``is_high_migration_rural``, ``severe_distress`` and
+      ``deep_distress`` are ``Optional[bool]``, and are ``None`` ONLY on those two
+      indeterminate branches. FOR A FOUND TRACT THEIR ``False`` IS UNCHANGED and
+      is fully supportable: it is the Fund's published ``NO``, verified strict
+      YES/NO across all 85,395 rows with zero blanks — including the 2,750 rows
+      with null demographics, for which the Fund still published a determination.
+      The rule is per-observation, not per-field: tri-state where a positive is
+      obtainable, and on those branches nothing at all was read.
+    - ``is_opportunity_zone`` is ``Optional[bool]`` on EVERY path: ``True`` when
+      the GEOID is on the Dec-2018 designation list, ``None`` otherwise. ``False``
+      is never returnable. The designations are 2010-tract-based and this table
+      and geocoder are 2020-basis, so a non-match and a genuine non-designation
+      are the same observation. Read ``opportunity_zone_status`` rather than the
+      truthiness of the field.
+    - ``is_nmtc_native_area`` IS REMOVED. It was never obtainable — the CDFI Fund
+      publishes no tract-keyed NMTC native-area resource, and AIANNH entities
+      carry four-digit GEOIDs with no state or county component, so they cannot
+      nest into SSCCCTTTTTT at all. A field that can only ever say "I don't know"
+      invites a consumer to read the absence of True as meaningful; dropping it
+      fails loud (AttributeError / TypeError) where a tri-state would fail silent.
     """
     address: str
     tract_id: Optional[str]
@@ -25,26 +65,50 @@ class EligibilityResult:
     poverty_rate: Optional[float]
     ami_ratio: Optional[float]
     unemployment_rate: Optional[float]
-    is_non_metro: bool
-    is_high_migration_rural: bool
-    # ALWAYS `False`: no column in the live CDFI Fund .xlsb populates this, so a
-    # `False` means "not determined," NOT "confirmed not a native area". Native
-    # areas are a real NMTC Areas-of-Higher-Distress criterion the CDFI Fund
-    # publishes separately from the LIC file. See README "Known Issues" / CHANGELOG.
-    is_nmtc_native_area: bool
-    severe_distress: bool
-    deep_distress: bool
+    # Tri-state (0.5.0): None ONLY on the two indeterminate branches. A found
+    # tract's False is the Fund's published NO and is unchanged.
+    is_non_metro: Optional[bool]
+    is_high_migration_rural: Optional[bool]
+    severe_distress: Optional[bool]
+    deep_distress: Optional[bool]
+    # Means "no unresolved address stands between this result and its tract" —
+    # NOT "geocoding succeeded". check_tract() sets it True with no geocoding
+    # performed, because the caller supplied the GEOID. Stays a plain bool.
     geocode_success: bool
-    # A `False` here may be a VINTAGE MISS, not "not an OZ": the OZ list is
-    # 2010-tract-based while the geocoder returns 2020 tracts, so ~16% of OZ
-    # designations have no matching GEOID. A `True` is trustworthy; a `False` is
-    # not distinguishable from "not an OZ". See README "Known Issues" / CHANGELOG.
-    is_opportunity_zone: bool = False
+    # Tri-state (0.5.0), True or None, NEVER False. See the class docstring and
+    # opportunity_zone_status. Keyed on designation-set membership, NOT on
+    # tract_found: a retired 2010 GEOID that is designated correctly returns True
+    # alongside tract_found=False, which is the one place the OZ answer is more
+    # complete than the eligibility answer.
+    is_opportunity_zone: Optional[bool] = None
     tract_found: bool = True
 
     @property
     def distress_description(self) -> str:
         return DISTRESS_LEVELS.get(self.distress_level, "Unknown")
+
+    @property
+    def opportunity_zone_status(self) -> str:
+        """Three-way OZ status, parallel to ``eligibility_status`` (0.5.0).
+
+        designated / not-confirmed / no-tract.
+
+        Exists because ``bool -> Optional[bool]`` breaks silently: ``None`` is
+        falsy, so ``if r.is_opportunity_zone:`` keeps running and starts meaning
+        something else. Switch on this instead — ``summary()`` does.
+
+        Three values, not four. The reasons behind ``not-confirmed`` — genuinely
+        not designated, a 2010->2020 vintage miss, or an Island Area outside this
+        table — are exactly what the package CANNOT distinguish, so enumerating
+        them as separate statuses would re-introduce the fabrication in string
+        form.
+        """
+        if self.is_opportunity_zone:
+            return "designated"
+        if self.tract_id is None:
+            # No GEOID in hand; there is nothing to test membership against.
+            return "no-tract"
+        return "not-confirmed"
 
     @property
     def eligibility_status(self) -> str:
@@ -88,11 +152,29 @@ class EligibilityResult:
             print(f"  AMI Ratio:        {self.ami_ratio*100:.1f}%")
         if self.unemployment_rate is not None:
             print(f"  Unemployment:     {self.unemployment_rate*100:.1f}%")
-        print(f"  Non-Metro:        {'Yes' if self.is_non_metro else 'No'}")
-        # "No" here may be a vintage miss (2010-based OZ list vs 2020 tract) — see
-        # is_opportunity_zone and README "Known Issues".
-        print(f"  Opportunity Zone: {'Yes' if self.is_opportunity_zone else 'No'}")
-        print(f"  High Migration:   {'Yes' if self.is_high_migration_rural else 'No'}")
+        # EVERY line below is a three-branch switch, NEVER a ternary on the value.
+        # `None` is falsy, so `'Yes' if x else 'No'` would keep printing "No"
+        # after the type was fixed — the human-readable block is the thing a user
+        # pastes into a memo, so the fabricated negative has to be killed here
+        # explicitly, not just in the type. Qualifiers are INLINE on the same
+        # line, never a footer: a footer is what gets dropped when one line is
+        # copied out.
+        print(f"  Non-Metro:        {_tri(self.is_non_metro)}")
+        # Switched on opportunity_zone_status, not on truthiness — which is what
+        # structurally prevents the ternary trap from coming back.
+        oz = self.opportunity_zone_status
+        if oz == "designated":
+            oz_line = ("✅ YES — GEOID is on the Dec-2018 designation list, which is\n"
+                       "                    2010-tract-based (a claim about the list, "
+                       "not about the parcel)")
+        elif oz == "not-confirmed":
+            oz_line = ("❓ NOT CONFIRMED — not on the 2018 designation list, which is\n"
+                       "                    2010-tract-based (indeterminate, NOT "
+                       "\"not an Opportunity Zone\")")
+        else:
+            oz_line = "❓ UNKNOWN — no census tract resolved"
+        print(f"  Opportunity Zone: {oz_line}")
+        print(f"  High Migration:   {_tri(self.is_high_migration_rural)}")
         print()
 
 
@@ -117,17 +199,24 @@ def check_tract(
         # INDETERMINATE verdict (nmtc_eligible None, distress "unknown", metrics
         # None) and an explicit tract_found=False so a caller can tell "table
         # says NO" from "tract absent" without having to notice metrics are None.
+        #
+        # 0.5.0: the four supporting booleans are None here too. Through 0.4.3
+        # this branch — written specifically to stop the package fabricating a
+        # verdict — set every one of them to a confident False about a tract no
+        # row was read for, so `df[~df.is_high_migration_rural]` and
+        # `result.severe_distress` returned confident wrong answers while
+        # `eligibility_status` (the field designed to make this impossible to
+        # miss) sat on a different attribute.
         return {
             "nmtc_eligible": None,
             "distress_level": "unknown",
             "poverty_rate": None,
             "ami_ratio": None,
             "unemployment_rate": None,
-            "is_non_metro": False,
-            "is_high_migration_rural": False,
-            "is_nmtc_native_area": False,
-            "severe_distress": False,
-            "deep_distress": False,
+            "is_non_metro": None,
+            "is_high_migration_rural": None,
+            "severe_distress": None,
+            "deep_distress": None,
             "tract_found": False,
         }
 
@@ -140,7 +229,6 @@ def check_tract(
         "unemployment_rate":     row.get("unemployment_rate"),
         "is_non_metro":          bool(row.get("is_non_metro", False)),
         "is_high_migration_rural": bool(row.get("is_high_migration_rural", False)),
-        "is_nmtc_native_area":   bool(row.get("is_nmtc_native_area", False)),
         "severe_distress":       bool(row.get("severe_distress", False)),
         "deep_distress":         bool(row.get("deep_distress", False)),
         "tract_found":           True,
@@ -165,10 +253,15 @@ def enrich_dataframe(
     """
     df = df.copy()
 
+    # 0.5.0 dropped is_nmtc_native_area, so this writes NINE eligibility columns
+    # plus eligibility_status. The frame is object-dtype, so the four tri-state
+    # columns store None correctly — but note that `~df["severe_distress"]` now
+    # raises TypeError on a frame containing indeterminate rows. Filter with
+    # `df["severe_distress"] != True`.
     eligibility_cols = [
         "nmtc_eligible", "distress_level", "poverty_rate",
         "ami_ratio", "unemployment_rate", "is_non_metro",
-        "is_high_migration_rural", "is_nmtc_native_area", "severe_distress", "deep_distress",
+        "is_high_migration_rural", "severe_distress", "deep_distress",
     ]
 
     for col in eligibility_cols:

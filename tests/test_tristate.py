@@ -71,7 +71,6 @@ def test_eligibility_status_none_is_never_verified_ineligible():
         unemployment_rate=None,
         is_non_metro=False,
         is_high_migration_rural=False,
-        is_nmtc_native_area=False,
         severe_distress=False,
         deep_distress=False,
         geocode_success=True,

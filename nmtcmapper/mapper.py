@@ -14,6 +14,22 @@ from nmtcmapper.eligibility.checker import (
 )
 
 
+def _oz_status(tract_id: str, oz_tracts: set) -> Optional[bool]:
+    """True if the GEOID is a designated 2018 QOZ, else None. NEVER False (0.5.0).
+
+    KEYED ON SET MEMBERSHIP, NOT ON ``tract_found``. A retired 2010 GEOID that is
+    designated returns a correct True alongside tract_found=False — the OZ answer
+    is more complete than the eligibility answer there, and a naive "None unless
+    found" rule would destroy a correct answer.
+
+    A `False` is not returnable because the 2018 designations are 2010-tract-based
+    and this package's table and geocoder are 2020-basis: 1,408 of the 8,764
+    designations have no row in the 2020-basis table, so a non-match and a genuine
+    non-designation are THE SAME OBSERVATION without a crosswalk.
+    """
+    return True if tract_id in oz_tracts else None
+
+
 class NMTCMapper:
     """
     Check NMTC eligibility for addresses or census tracts.
@@ -96,6 +112,10 @@ class NMTCMapper:
 
         if tract_id is None:
             # Genuine no-match -> INDETERMINATE, never False/"ineligible".
+            # 0.5.0: EVERY tract-derived boolean is None here. No tract was
+            # resolved, so there is nothing to test OZ membership against either —
+            # this is the one branch that fabricated a sixth negative, because
+            # check_tract()'s miss branch at least has a real GEOID to test.
             return EligibilityResult(
                 address=address,
                 tract_id=None,
@@ -106,16 +126,15 @@ class NMTCMapper:
                 poverty_rate=None,
                 ami_ratio=None,
                 unemployment_rate=None,
-                is_non_metro=False,
-                is_high_migration_rural=False,
-                is_nmtc_native_area=False,
-                severe_distress=False,
-                deep_distress=False,
-                is_opportunity_zone=False,
+                is_non_metro=None,
+                is_high_migration_rural=None,
+                severe_distress=None,
+                deep_distress=None,
+                is_opportunity_zone=None,
             )
 
         data = check_tract(tract_id, self._table)
-        data["is_opportunity_zone"] = tract_id in self._oz_tracts
+        data["is_opportunity_zone"] = _oz_status(tract_id, self._oz_tracts)
         return EligibilityResult(
             address=address,
             tract_id=tract_id,
@@ -134,7 +153,7 @@ class NMTCMapper:
             EligibilityResult with eligibility flags
         """
         data = check_tract(tract_id, self._table)
-        data["is_opportunity_zone"] = tract_id in self._oz_tracts
+        data["is_opportunity_zone"] = _oz_status(tract_id, self._oz_tracts)
         return EligibilityResult(
             address=f"Census Tract {tract_id}",
             tract_id=tract_id,
@@ -171,9 +190,23 @@ class NMTCMapper:
             - poverty_rate (Optional[float])
             - ami_ratio (Optional[float])
             - unemployment_rate (Optional[float])
-            - is_non_metro (bool)
-            - severe_distress (bool)
-            - deep_distress (bool)
+            - is_non_metro (Optional[bool])
+            - is_high_migration_rural (Optional[bool])
+            - severe_distress (Optional[bool])
+            - deep_distress (Optional[bool])
+
+            Nine eligibility columns plus eligibility_status. The four
+            Optional[bool] columns are None exactly when eligibility_status is
+            'not-found' or 'geocode-failed' — no row was read, so there is nothing
+            to report. Filter them with `!= True`, never `~col`: `~None` on an
+            object-dtype column raises TypeError.
+
+            is_opportunity_zone is NOT among them — it never has been. Batch
+            callers get no OZ answer; single-address callers do. 0.5.0
+            deliberately does not close that gap (adding a column is a
+            data-surface change, not an honesty fix).
+            is_nmtc_native_area was REMOVED in 0.5.0; reading it now raises
+            KeyError.
         """
         df = df.copy()
 

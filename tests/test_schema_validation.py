@@ -519,3 +519,66 @@ def test_the_or_is_a_no_op_on_the_file_as_published(monkeypatch):
     assert bool(hmr["nmtc_eligible"].all())
     # the OR adds nobody outside the column-N set
     assert df.loc["17031030604"]["nmtc_eligible"] == False
+
+
+# ── 0.5.0: categorical cell-value allowlists ─────────────────────────────────
+# THE HEADER GUARD PINS HEADER STRINGS, NOT CELL VOCABULARIES. A re-publish that
+# leaves every header byte-identical and rewrites one cell from YES to Y passes
+# the header check completely — and this Fund has already re-published this file
+# in place once. Before 0.5.0 the parse absorbed such a change silently and in
+# the WORST direction: `!= "METRO"` drifted True (over-inclusive), while the
+# `== "YES"` tests on columns C/N/O/P drifted False — a fabricated negative on
+# the LIC verdict and on both distress flags.
+
+@pytest.mark.parametrize("kwargs,col_label,planted", [
+    ({"metro":   "Nonmetro"}, "1 (OMB Metro/Non-metro Designation)", "Nonmetro"),
+    ({"lic":     "Y"},        "C (LIC eligibility)",                 "Y"),
+    ({"highmig": "Y"},        "N (High Migration Rural County LIC)", "Y"),
+    ({"severe":  "Y"},        "O (Severe distress)",                 "Y"),
+    ({"deep":    "Y"},        "P (Deep distress)",                   "Y"),
+])
+def test_unrecognized_cell_value_raises_naming_column_value_and_row(
+        monkeypatch, kwargs, col_label, planted):
+    """Each of the five categorical columns rejects a value outside its allowlist,
+    and the message names the column, the offending value and the row index."""
+    bad = make_row("17031030604", **kwargs)
+    rows = [LIVE_HEADER, PIN_ELIGIBLE, bad] + _padding(1200)
+    with pytest.raises(EligibilitySchemaError) as ei:
+        _load(monkeypatch, rows)
+    msg = str(ei.value)
+    assert col_label in msg                 # names the column
+    assert repr(planted) in msg             # names the offending value
+    assert "data row 2" in msg              # names the row index (header is row 0)
+
+
+def test_the_header_guard_cannot_see_a_value_change(monkeypatch):
+    """Why the allowlist is not redundant with the header pin: a YES -> Y edit
+    leaves every header byte-identical, so the header guard passes it completely.
+    Before 0.5.0 nothing else was looking."""
+    bad = make_row("17031030604", severe="Y")
+    rows = [LIVE_HEADER, bad] + _padding(1200)
+    # the header row is untouched and still matches every pin
+    for idx, expected in ELIGIBILITY_XLSB_EXPECTED_HEADERS.items():
+        assert rows[0][idx] == expected
+    # ...and only the value allowlist catches it
+    with pytest.raises(EligibilitySchemaError):
+        _load(monkeypatch, rows)
+
+
+def test_yes_no_and_metro_vocabularies_still_parse(monkeypatch):
+    """The allowlist must not reject the file as published. Both spellings of
+    every column, in both cases, parse exactly as before."""
+    a = make_row("17031030604", metro="Metro",     lic="NO",  highmig="NO",
+                 severe="NO",  deep="NO")
+    b = make_row("01001020200", metro="Non-metro", lic="YES", highmig="YES",
+                 severe="YES", deep="YES", poverty=45.0, mfi=0.35, unemp=14.0)
+    # case and surrounding whitespace are normalized before the match
+    c = make_row("26163518300", metro=" non-METRO ", lic=" yes ", highmig="Yes",
+                 severe="yes", deep="No", poverty=45.0, mfi=0.35, unemp=14.0)
+    df = _load(monkeypatch, [LIVE_HEADER, a, b, c] + _padding(1200))
+    assert df.loc["17031030604"]["is_non_metro"] == False
+    assert df.loc["01001020200"]["is_non_metro"] == True
+    assert df.loc["01001020200"]["deep_distress"] == True
+    assert df.loc["26163518300"]["is_non_metro"] == True
+    assert df.loc["26163518300"]["severe_distress"] == True
+    assert df.loc["26163518300"]["deep_distress"] == False

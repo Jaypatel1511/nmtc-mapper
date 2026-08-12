@@ -17,10 +17,9 @@ from nmtcmapper.exceptions import (
 )
 from nmtcmapper.data.schema import (
     CACHE_DIR, CDFI_FUND_LIC_URL_2020,
-    ELIGIBILITY_FILE_COLUMNS,
     ELIGIBILITY_XLSB_SHEET, ELIGIBILITY_XLSB_COLUMN_COUNT,
     ELIGIBILITY_XLSB_EXPECTED_HEADERS, ELIGIBILITY_MIN_ROWS,
-    ELIGIBILITY_VALUE_BOUNDS,
+    ELIGIBILITY_VALUE_BOUNDS, ELIGIBILITY_XLSB_VALUE_ALLOWLISTS,
     LIC_POVERTY_RATE_THRESHOLD,
     LIC_AMI_RATIO_METRO_THRESHOLD,
     LIC_AMI_RATIO_RURAL_THRESHOLD,
@@ -105,6 +104,38 @@ def _check_value_bounds(field: str, value, row_index: int) -> None:
             f"~0.9; a value near percent scale ~91 signals an upstream 100x "
             f"scale flip that would break every AMI comparison.)"
         )
+
+
+def _checked_cell(col_index: int, raw, row_index: int) -> str:
+    """Normalize a categorical cell and reject any value outside its allowlist (0.5.0).
+
+    Returns the `.strip().upper()` form so the caller compares against a value
+    this function has already vouched for.
+
+    The header guard pins header STRINGS; it cannot see a change to cell
+    VOCABULARY (schema.ELIGIBILITY_XLSB_VALUE_ALLOWLISTS). Without this check the
+    `== "YES"` tests on columns 2/13/14/15 map every unrecognized value to
+    `False` — `'Y'` parses to `False` — which is a fabricated negative on the LIC
+    verdict and on both distress flags. The `!= "METRO"` test on column 1 fails
+    the other way, mapping anything unrecognized to `True`. Both are silent.
+    Raise instead: this loader binds columns positionally and there is no safe
+    way to continue past a value it does not recognize.
+    """
+    label, allowed = ELIGIBILITY_XLSB_VALUE_ALLOWLISTS[col_index]
+    normalized = str(raw).strip().upper()
+    if normalized not in allowed:
+        raise EligibilitySchemaError(
+            f"eligibility .xlsb column {label} carries an unrecognized value at "
+            f"data row {row_index}: {raw!r} (normalizes to {normalized!r}). "
+            f"Expected one of {sorted(allowed)}."
+            f"\n\nThe header guard cannot catch this: it pins header strings, not "
+            f"cell vocabularies, so a re-publish that leaves every header "
+            f"byte-identical and rewrites a cell value passes it completely. "
+            f"Parsing on would silently map this value to a verdict this package "
+            f"cannot support."
+            + _DRIFT_REMEDY
+        )
+    return normalized
 
 
 def get_cache_dir() -> Path:
@@ -270,10 +301,14 @@ def _load_eligibility_table(force: bool = False) -> pd.DataFrame:
         )
     print(f"Loading eligibility table from {path}...")
     try:
-        if path.suffix == ".xlsb":
-            return _load_xlsb_table(path)
-        df = pd.read_excel(path, dtype=str)
-        return _process_eligibility_table(df)
+        # 0.5.0: the `.xlsb` parser is the ONLY parser. Through 0.4.3 an `else`
+        # branch here read a generic workbook via `_process_eligibility_table()`,
+        # which was structurally unreachable — `path` comes only from
+        # `download_eligibility_file()`, which returns only the cache path, whose
+        # filename is a module constant ending `.xlsb`. Both the branch and the
+        # function are deleted; see schema.py's removal note for the drive that
+        # confirmed it before the cut.
+        return _load_xlsb_table(path)
     except EligibilityDataError:
         raise
     except ImportError:
@@ -365,19 +400,22 @@ def _load_xlsb_table(path: Path) -> pd.DataFrame:
                     continue
 
                 geoid        = str(vals[0]).strip().zfill(11)
-                non_metro    = str(vals[1]).strip().upper() != "METRO"
+                # Every categorical cell goes through the value allowlist first
+                # (0.5.0). `_checked_cell` raises on anything unrecognized rather
+                # than letting `!= "METRO"` drift True or `== "YES"` drift False.
+                non_metro    = _checked_cell(1, vals[1], i) == "NON-METRO"
                 poverty_rate = (_num(vals[3]) / 100) if _num(vals[3]) is not None else None
                 ami_ratio    = _num(vals[5])
                 unemp_rate   = (_num(vals[7]) / 100) if _num(vals[7]) is not None else None
-                high_migr    = str(vals[13]).strip().upper() == "YES"
-                severe       = str(vals[14]).strip().upper() == "YES"
-                deep         = str(vals[15]).strip().upper() == "YES"
+                high_migr    = _checked_cell(13, vals[13], i) == "YES"
+                severe       = _checked_cell(14, vals[14], i) == "YES"
+                deep         = _checked_cell(15, vals[15], i) == "YES"
 
                 # The LIC verdict is column C **OR** column N, never column C
                 # alone. See the block comment above _load_xlsb_table for why
                 # column N is an LIC determination and not bare "in a high
                 # migration rural county", and why this is a no-op today.
-                lic_elig     = (str(vals[2]).strip().upper() == "YES") or high_migr
+                lic_elig     = (_checked_cell(2, vals[2], i) == "YES") or high_migr
 
                 # Value plausibility (Fix 6) — on the STORED value; None passes.
                 _check_value_bounds("poverty_rate", poverty_rate, i)
@@ -402,7 +440,6 @@ def _load_xlsb_table(path: Path) -> pd.DataFrame:
                     "unemployment_rate":     unemp_rate,
                     "is_non_metro":          non_metro,
                     "is_high_migration_rural": high_migr,
-                    "is_nmtc_native_area":   False,
                     "severe_distress":       severe,
                     "deep_distress":         deep,
                 })
@@ -421,54 +458,77 @@ def _load_xlsb_table(path: Path) -> pd.DataFrame:
     return df
 
 
-def _process_eligibility_table(df: pd.DataFrame) -> pd.DataFrame:
-    df.columns = df.columns.str.strip().str.upper()
-    col_map = {k: v for k, v in ELIGIBILITY_FILE_COLUMNS.items() if k in df.columns}
-    df = df.rename(columns=col_map)
-    if "tract_id" not in df.columns:
-        if all(c in df.columns for c in ["state", "county", "tract"]):
-            df["tract_id"] = (
-                df["state"].str.zfill(2) +
-                df["county"].str.zfill(3) +
-                df["tract"].str.zfill(6)
-            )
-    for col in ["poverty_rate", "ami_ratio", "unemployment_rate"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    for col in ["is_non_metro", "is_high_migration_rural"]:
-        if col in df.columns:
-            df[col] = df[col].isin({"Y", "YES", "1", "True", "TRUE", "X"})
-    df = _compute_eligibility(df)
-    if "tract_id" in df.columns:
-        df = df.set_index("tract_id")
-    print(f"Eligibility table loaded: {len(df):,} census tracts")
-    return df
-
-
 def _compute_eligibility(df: pd.DataFrame) -> pd.DataFrame:
+    """Apply the NMTC LIC / distress rules to a metrics frame.
+
+    BACKS `load_sample_table()` ONLY. The official `.xlsb` path never calls this:
+    it reads the Fund's own published columns C/N/O/P. Through 0.4.3 a second
+    call site existed on a generic-workbook branch; that branch was structurally
+    unreachable and 0.5.0 deleted it.
+
+    Three structural defects were corrected in 0.5.0, all over-inclusive:
+
+    1. NO `AND LIC` CONJUNCTION on severe/deep. The Fund's own column headers read
+       `Severe distress=LIC AND (...)` / `Deep distress=LIC AND (...)`: distress
+       is a tier WITHIN eligibility, never a route into it. Poverty >= 30% implies
+       poverty >= 20% and MFI <= 60% implies MFI <= 80%, so those two prongs
+       cannot fire outside LIC — but unemployment carries no LIC implication.
+       Measured on the live 85,395 rows, the shipped rule flagged 5,197 tracts
+       severe or deep while NOT LIC, every one carried by the unemployment prong
+       alone. deep is a subset of severe under this rule (every deep prong is
+       strictly tighter than its severe counterpart, and NaN fails both), so the
+       union IS the severe count: 5,197 severe / 751 deep.
+
+    2. `is_non_metro` STOOD IN FOR THE HIGH-MIGRATION-RURAL 85% BAND.
+       §45D(e)(1)(B) sets the income test at 80% for EVERY tract; the 85% figure
+       comes from §45D(e)(5)(A) alone, which attaches the substitution to
+       paragraph (1)(B)(i) — the NON-METROPOLITAN branch — and nothing else. And
+       §45D(e)(5)(B) defines "high migration rural county" by out-migration
+       alone, with no rurality test and no metropolitan test, so a METROPOLITAN
+       county can satisfy it; when it does, its tracts are governed by (1)(B)(ii),
+       which the substitution never touches. The band therefore requires
+       `hmr & ~metro`. On the current file all 1,422 HMR tracts are non-metro, so
+       the conjunct is redundant as an empirical property of ONE PUBLISHED FILE,
+       not as a logical one — which is exactly why it is written out. The shipped
+       rule granted LIC to 932 tracts on non-metro status alone.
+
+    3. `>=` vs `>` ON THE DISTRESS POVERTY PRONGS. The Fund publishes strictly
+       greater (`Poverty>30%`, `Poverty>40%`; April 2025 Compliance FAQ Q32), and
+       the boundary population decides it: of the LIC tracts at exactly 30.0%
+       qualifying on poverty alone the Fund published severe=NO for all 21, and at
+       exactly 40.0% deep=NO for all 13. THE LIC PRONG STAYS `>=` — §45D(e)(1)(A)
+       says a poverty rate "of at least 20 percent".
+    """
     pr = df.get("poverty_rate", pd.Series(dtype=float))
     ami = df.get("ami_ratio", pd.Series(dtype=float))
     unemp = df.get("unemployment_rate", pd.Series(dtype=float))
     non_metro = df.get("is_non_metro", pd.Series(False, index=df.index))
-    if "is_nmtc_native_area" not in df.columns:
-        df["is_nmtc_native_area"] = False
+    high_migr = df.get("is_high_migration_rural", pd.Series(False, index=df.index))
 
+    # LIC poverty prong is `>=` and MUST STAY `>=` — 45D(e)(1)(A), "at least".
     poverty_lic = pr >= LIC_POVERTY_RATE_THRESHOLD
+    # 80% for every tract, PLUS the 85% band for high-migration-rural tracts that
+    # are also non-metropolitan. See defect (2) above.
     ami_lic = (
-        (non_metro & (ami <= LIC_AMI_RATIO_RURAL_THRESHOLD)) |
-        (~non_metro & (ami <= LIC_AMI_RATIO_METRO_THRESHOLD))
+        (ami <= LIC_AMI_RATIO_METRO_THRESHOLD) |
+        (high_migr & non_metro & (ami <= LIC_AMI_RATIO_RURAL_THRESHOLD))
     )
     df["nmtc_eligible"] = poverty_lic | ami_lic
+    lic = df["nmtc_eligible"]
 
-    sev_poverty = pr >= SEVERE_POVERTY_THRESHOLD
+    # Distress poverty prongs are STRICTLY greater, and both tiers are AND-ed
+    # with LIC. AND-ing here — rather than at the columns' consumers — is what
+    # also repairs `distress_label` below, which short-circuits on the distress
+    # columns before it ever consults nmtc_eligible.
+    sev_poverty = pr > SEVERE_POVERTY_THRESHOLD
     sev_ami = ami <= SEVERE_AMI_THRESHOLD
     sev_unemp = unemp >= (NATIONAL_UNEMPLOYMENT_RATE * SEVERE_UNEMPLOYMENT_MULTIPLIER)
-    df["severe_distress"] = sev_poverty | sev_ami | sev_unemp
+    df["severe_distress"] = lic & (sev_poverty | sev_ami | sev_unemp)
 
-    deep_poverty = pr >= DEEP_POVERTY_THRESHOLD
+    deep_poverty = pr > DEEP_POVERTY_THRESHOLD
     deep_ami = ami <= DEEP_AMI_THRESHOLD
     deep_unemp = unemp >= (NATIONAL_UNEMPLOYMENT_RATE * DEEP_UNEMPLOYMENT_MULTIPLIER)
-    df["deep_distress"] = deep_poverty | deep_ami | deep_unemp
+    df["deep_distress"] = lic & (deep_poverty | deep_ami | deep_unemp)
 
     def distress_label(row):
         if row.get("deep_distress"):
@@ -493,22 +553,25 @@ def load_sample_table() -> pd.DataFrame:
     ``load_sample_table()`` or ``NMTCMapper.from_sample()`` when you knowingly
     want demo data with ``data_source == "sample"``.
     """
+    # 0.5.0 dropped the trailing `native_area` element with the
+    # `is_nmtc_native_area` field: it was `False` on all twelve rows and no source
+    # this package loads could ever have made it True.
     sample_tracts = [
-        ("17031840100", 0.38, 0.55, 0.12, False, False, False),
-        ("17031839100", 0.42, 0.48, 0.15, False, False, False),
-        ("17031010100", 0.18, 0.92, 0.04, False, False, False),
-        ("36061015900", 0.35, 0.60, 0.11, False, False, False),
-        ("36061019100", 0.28, 0.72, 0.09, False, False, False),
-        ("36047052200", 0.14, 0.88, 0.05, False, False, False),
-        ("26163518300", 0.45, 0.45, 0.18, False, False, False),
-        ("26163520100", 0.32, 0.62, 0.13, False, False, False),
-        ("13121010400", 0.29, 0.68, 0.10, False, False, False),
-        ("48113010900", 0.22, 0.78, 0.07, False, False, False),
-        ("17019000100", 0.15, 0.95, 0.03, True,  True,  False),
-        ("26001010100", 0.18, 0.88, 0.06, True,  False, False),
+        ("17031840100", 0.38, 0.55, 0.12, False, False),
+        ("17031839100", 0.42, 0.48, 0.15, False, False),
+        ("17031010100", 0.18, 0.92, 0.04, False, False),
+        ("36061015900", 0.35, 0.60, 0.11, False, False),
+        ("36061019100", 0.28, 0.72, 0.09, False, False),
+        ("36047052200", 0.14, 0.88, 0.05, False, False),
+        ("26163518300", 0.45, 0.45, 0.18, False, False),
+        ("26163520100", 0.32, 0.62, 0.13, False, False),
+        ("13121010400", 0.29, 0.68, 0.10, False, False),
+        ("48113010900", 0.22, 0.78, 0.07, False, False),
+        ("17019000100", 0.15, 0.95, 0.03, True,  True),
+        ("26001010100", 0.18, 0.88, 0.06, True,  False),
     ]
     rows = []
-    for tid, pr, ami, unemp, non_metro, high_migration, native_area in sample_tracts:
+    for tid, pr, ami, unemp, non_metro, high_migration in sample_tracts:
         rows.append({
             "tract_id": tid,
             "state": tid[:2],
@@ -517,7 +580,6 @@ def load_sample_table() -> pd.DataFrame:
             "unemployment_rate": unemp,
             "is_non_metro": non_metro,
             "is_high_migration_rural": high_migration,
-            "is_nmtc_native_area": native_area,
         })
     df = pd.DataFrame(rows)
     df = _compute_eligibility(df)
@@ -544,9 +606,14 @@ def load_opportunity_zones(force: bool = False) -> set:
 
     VINTAGE CAVEAT: these are 2010-based census tracts (OZs were designated in
     2018 on 2010 geography). The geocoder returns 2020 tracts, so ~16% of these
-    GEOIDs (1,408 / 8,764) have no 2020 equivalent and will not match — a
-    resulting ``is_opportunity_zone=False`` may be a vintage miss, not a real
-    "not an OZ". See README "Known Issues".
+    GEOIDs (1,408 / 8,764) have no row in the 2020-basis eligibility table.
+
+    0.5.0: THAT IS WHY ``is_opportunity_zone`` IS NEVER ``False``. A vintage miss
+    and a genuine non-designation are the same observation without a crosswalk,
+    so a non-match returns ``None`` — see ``EligibilityResult`` and
+    ``opportunity_zone_status``. Membership is tested against this set directly
+    and NOT against ``tract_found``, so a retired 2010 GEOID that is designated
+    still returns a correct ``True``.
     """
     from nmtcmapper.data.schema import OZ_URL_2018
 
