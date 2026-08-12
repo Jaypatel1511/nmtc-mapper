@@ -36,6 +36,33 @@ Seven tags. `pyproject.toml` version `0.4.2`. PyPI latest `0.4.2` (queried; the
 project has twelve releases on PyPI and seven tags — `0.1.0` through `0.3.0`
 predate tagging). 140 tests collected.
 
+**Repository state at this revision, and why it differs.** `main` has moved: **0.4.3
+shipped**, `main` is at `3feb601`, the annotated tag `v0.4.3` points there, and there
+are now **eight** tags. PyPI latest is **`0.4.3`**, thirteen releases (queried this
+session, not assumed).
+This branch is unchanged at version `0.4.2` and is deliberately behind — it is a
+methodology branch, not the release branch, and nothing here merges, tags, pushes,
+publishes or bumps. The suite is 140 collected / **131 offline** (9 `live`-marked
+tests deselected without network); `docs-check` **PASSes with the ledger at exactly
+twelve**. The published documentation site has been **retired** — `gh-pages` is gone
+from the remote and the `site_url` in `mkdocs.yml:3` returns 404 (§M8.3b(ii)).
+
+Three corrections landed in this revision, all found after the hostile audit and all
+recorded as findings **27 to 29** in §10.1: a false claim about the
+`nmtc-eligibility` skill (§M2.3, §M8.3e, ledger row 14), a reachability result whose
+method could not have reached it (§M6.1), and a designation count re-labelled as a
+tract count (§M1.2). Re-executed for this revision, against the same artefacts above:
+
+- both `_compute_eligibility` call sites, `loader.py:441` and `loader.py:523`, the
+  first **driven** rather than argued (§M6.1);
+- the non-LIC severe/deep population on the live 85,395 rows — **5,197**, all of it
+  carried by the unemployment prong (§M6.3(1));
+- the Island Areas counts, **75** OZ designations and **133** tracts, from their two
+  separate files (§M1.2);
+- `cdfi-superpowers` at `4705124`, grepped for the phrase this document attributed to
+  it: **zero matches** (§M9.3);
+- §M8.3(b)'s build gate, against `main` at `3feb601`: **discharged**.
+
 Two commands reproduce the core of M1 and M7:
 
 ```
@@ -136,15 +163,20 @@ and false of 76:
 | Class | Count | What it is |
 |---|---|---|
 | 2010 GEOID retired at the 2020 vintage | **1,332** | Genuine vintage miss: the tract exists in the 2010 gazetteer and in the relationship file, and has no 2020 tract of the same code. |
-| **Island Areas** (FIPS 60, 66, 69, 78) | **75** | American Samoa, Guam, CNMI, USVI. These are **not in the Fund's table at any vintage** — the 2016–2020 ACS did not cover them, and the Fund publishes Island Areas LIC eligibility in a separate file (`NMTC_LIC_Territory_2020_December_2023.xlsx`) built on the 2020 Island Areas Decennial Census. Their absence is a coverage hole, permanent, and has nothing to do with tract vintage. It is also a gap in a **named federal criterion**, not merely in coverage: FAQ Q32 enumerates *"4) US Island Areas: Island Areas of the United States, as determined by the United States Census Bureau including Puerto Rico, U.S. Virgin Islands, Guam, the Commonwealth of the Northern Mariana Islands, and American Samoa"* as one of the four Areas of Deep Distress criteria. Puerto Rico falls inside that criterion **and** inside the Fund's table, so the 75 uncovered tracts are the four non-PR Island Areas only — but for those four the package cannot evaluate a criterion the Fund has published. |
+| **Island Areas** (FIPS 60, 66, 69, 78) | **75** | American Samoa, Guam, CNMI, USVI. These are **not in the Fund's table at any vintage** — the 2016–2020 ACS did not cover them, and the Fund publishes Island Areas LIC eligibility in a separate file (`NMTC_LIC_Territory_2020_December_2023.xlsx`) built on the 2020 Island Areas Decennial Census. Their absence is a coverage hole, permanent, and has nothing to do with tract vintage. It is also a gap in a **named federal criterion**, not merely in coverage: FAQ Q32 enumerates *"4) US Island Areas: Island Areas of the United States, as determined by the United States Census Bureau including Puerto Rico, U.S. Virgin Islands, Guam, the Commonwealth of the Northern Mariana Islands, and American Samoa"* as one of the four Areas of Deep Distress criteria. Puerto Rico falls inside that criterion **and** inside the Fund's table, so this class covers the four non-PR Island Areas only — but for those four the package cannot evaluate a criterion the Fund has published. **Read the 75 for what it counts.** It is 75 **2018 OZ designations** on 2010 geography in FIPS 60 / 66 / 69 / 78, drawn from the designation file (16 / 25 / 20 / 14, re-derived this session; 1,332 + 75 + 1 = 1,408). It is **not** the size of the coverage hole. The four jurisdictions hold **133 census tracts on 2020 geography** (18 / 57 / 26 / 32, per the Census 2020 TIGERweb tract layer and the TIGER/Line 2020 tract files, which agree), and the Fund's table contains **zero** rows for any of them — re-confirmed here against the live 85,395. An earlier pass wrote "the 75 uncovered tracts," conflating a designation count from one file with a tract count from another; **133 is the universe hole, 75 is this table's slice of the 1,408.** |
 | Not a valid tract at either vintage | **1** | `51019050100` — present in the OZ designation file, absent from the 2010 gazetteer, absent from the 2010 side of the relationship file, absent from the 2020 table. A defect in the source designation list, not in this package. |
 
 The `nmtc-eligibility` skill already documents the Island Areas hole correctly
-(§"Island Areas are a second scope hole of the same class"); the package README
-does not, and folds those 75 into a vintage explanation that does not apply to
-them. **0.5.0 corrects the README to the three-way split.** The user-visible
-answer is `None` in all three cases, so this changes no behaviour — it changes what
-the package says is true, which is the whole subject of this release.
+(`SKILL.md:186-200`, "Island Areas are a second scope hole of the same class" —
+re-verified at `4705124`), and **the README now documents it too**: 0.4.3 added
+"What the eligibility universe covers — and what it does not" at `README.md:174-193`,
+stating the 133-tract hole and distinguishing Puerto Rico's 981 in-file rows
+(§M8.3b). What 0.4.3 did **not** do is fix the *OZ* sentence, which still folds all
+1,408 into one vintage explanation. **0.5.0 corrects the README to the three-way
+split** — and should cross-reference the universe section rather than restate it, so
+the 75 and the 133 stay attached to the things they count. The user-visible answer is
+`None` in all three cases, so this changes no behaviour — it changes what the package
+says is true, which is the whole subject of this release.
 
 ### M1.3 Why the `True` direction is safe — with the limit stated
 
@@ -381,10 +413,17 @@ Three consequences:
    too strong; what Q31 establishes is that the Fund publishes **no tract-keyed
    lookup resource** for it while treating it as a compliance category. That is the
    claim 0.5.0 should make.
-2. **The package's current docs mis-categorise it.** The README, the CHANGELOG
-   (0.4.1), and the skill all call Native Areas an *Areas of Higher Distress*
-   criterion. Per this FAQ it is enumerated under **Areas of Deep Distress**. All
-   three must be corrected in 0.5.0.
+2. **The package's docs mis-categorised it; the skill never did.** As first written
+   this document said "the README, the CHANGELOG (0.4.1), and the skill all call
+   Native Areas an *Areas of Higher Distress* criterion." **The skill half was false
+   and is withdrawn.** Verified against `cdfi-superpowers` at `4705124`, across all
+   tracked files: `"Areas of Higher Distress"` returns **zero** matches, and a
+   case-insensitive search for `"higher distress"` returns **zero**. The skill does
+   not place Native Areas in the wrong tier — it makes no tier claim at all, saying
+   only that `is_nmtc_native_area` is always `False` and means "not determined"
+   (`SKILL.md:268-272`). The README and CHANGELOG halves were real and are now
+   **fixed on `main` at `3feb601`** by 0.4.3; see §M8.3(b) and (e) for the state of
+   each and for the one occurrence that is deliberately left standing.
 3. **The drop decision is unaffected, and better founded.** The field is being
    removed because the package cannot compute it, not because the criterion is
    unimportant. If the Fund ever publishes a tract-keyed file, the field returns as
@@ -801,7 +840,7 @@ reported that `_compute_eligibility()` backs only `load_sample_table()` /
 `from_sample()`. **That was a relayed claim and had never been re-verified.** It
 was verified here by execution, not by reading.
 
-### M6.1 The trace
+### M6.1 The trace, and the call site the trace could not see
 
 `nmtcmapper.data.loader._compute_eligibility` and `_process_eligibility_table` were
 wrapped with call-stack recorders, then four paths were exercised against the real
@@ -814,21 +853,98 @@ cached 4.8 MB workbook:
 | `NMTCMapper.from_sample()` | Yes — via `load_sample_table@loader.py:523` |
 | `load_sample_table()` | Yes — via `loader.py:523` |
 
-**It is sample-only.** Confirmed, not relayed.
+**State the method's limit before the conclusion.** A call-stack trace of loads that
+*succeed* can only observe the call sites those loads take. There are **two**
+`_compute_eligibility` call sites and the table above reaches one:
 
-The reason is structural rather than incidental, which is what makes it durable:
-`_process_eligibility_table()` is reached only from `_load_eligibility_table()`'s
-`else` branch at `loader.py:275`, which requires `path.suffix != ".xlsb"`. `path`
-comes only from `download_eligibility_file()`, which returns only
-`_eligibility_cache_path()`, which is `CACHE_DIR / ELIGIBILITY_CACHE_FILENAME` with
-`ELIGIBILITY_CACHE_FILENAME = "NMTC_LIC_Eligibility_2016_2020.xlsb"` — a module
-constant. **`_process_eligibility_table()` is unreachable dead code**, along with
+| Site | Caller | Observed by the trace above |
+|---|---|---|
+| `loader.py:523` | `load_sample_table()` — the built-in synthetic sample | Yes |
+| `loader.py:441` | `_process_eligibility_table()` — the generic non-`.xlsb` branch | **No** |
+
+So the second site was **driven**, not reasoned about. Everything below was executed
+this session:
+
+| Attempt | Result |
+|---|---|
+| Find any entry point, public or private, that accepts a user file or DataFrame | **None exists.** `load_eligibility_table(force: bool = False)`, `load_sample_table()`, `NMTCMapper(force_reload: bool = False)`, `NMTCMapper.from_sample()` — no path parameter on any of them, and no CLI (§10, finding 6) |
+| Reach `loader.py:441` with the package unmodified | **Never.** 0 calls, on every path in either table |
+| Reach it after rebinding `_eligibility_cache_path` **and** `download_eligibility_file` to point at a generic `.xlsx` | **Yes** — `_compute_eligibility` entered from `loader.py:441 in _process_eligibility_table()` |
+| The same rebinding pointed at a literal `.csv` | **`EligibilityParseError`.** The branch is `pd.read_excel(path, dtype=str)` (`loader.py:275`), so a CSV cannot traverse it at all |
+
+Two things follow, and both cut against the phrase *generic CSV path*.
+
+1. **The blind spot is real as a matter of method and empty as a matter of fact.**
+   The trace could not have seen `loader.py:441`; driving it shows why nothing else
+   does either. Reaching that site requires rebinding two module-private names from
+   outside the package. `path` comes only from `download_eligibility_file()`, which
+   returns only `_eligibility_cache_path()` = `CACHE_DIR / ELIGIBILITY_CACHE_FILENAME`,
+   and `ELIGIBILITY_CACHE_FILENAME = "NMTC_LIC_Eligibility_2016_2020.xlsb"` is a module
+   constant. The `else` branch at `loader.py:275` fires only when
+   `path.suffix != ".xlsb"`, and no input to the package can make that true.
+2. **There is no CSV path in either sense of the phrase.** No caller reaches the
+   branch, and the branch does not read CSV. It is the vestige of the `.xlsx` source
+   retired before v0.3.1, whose URL now 404s — which this repository's own CHANGELOG
+   already calls "the retired `.xlsx` path" (`CHANGELOG.md:323` on `main`).
+
+**`_process_eligibility_table()` is unreachable dead code**, along with
 `ELIGIBILITY_FILE_COLUMNS`, the `state`/`county`/`tract` GEOID assembly, and the
 `"NATIVE_AREA"` mapping that is the only thing in the package that could ever have
-set `is_nmtc_native_area=True`.
+set `is_nmtc_native_area=True`. **The rule is sample-only in the live branch and dead
+in the other — now confirmed at both call sites, neither relayed nor inferred.**
 
-**The priority order does not change. The OZ work leads 0.5.0.** But three
-qualifications:
+### M6.1a The re-ranking question, asked and answered
+
+The three structural defects rank below the OZ work on one ground: they reach only
+the 12 synthetic tracts whose own docstring calls them "NEVER valid for a real NMTC
+eligibility answer." **That ranking is downstream of the reachability bound, so it
+must be re-tested every time the bound moves** — a user-reachable path would invert
+it outright, because a user would then be getting the over-inclusive rule on their
+own data and §M6.2's 6,049 disagreements would be a live defect rather than a
+measurement of a dead one.
+
+It was re-tested above, at the call site the earlier method could not see, and it
+holds. **The priority order does not change, and now it does not change for an
+executed reason rather than an assumed one. The OZ work leads 0.5.0.**
+
+**One warning for the build, because the repository now disagrees with this
+section.** As of `main` at `3feb601`, 0.4.3 shipped three sites asserting a live
+generic-CSV caller:
+
+| Site (`main` at `3feb601`) | Text |
+|---|---|
+| `nmtcmapper/data/schema.py:98-101` | "exists only for the generic CSV path and the built-in synthetic sample… **A generic-CSV caller DOES get the over-inclusive fallback.**" |
+| `README.md:161-163` | "A threshold-based fallback (`_compute_eligibility`) exists only for the **generic CSV path** and the built-in synthetic sample" |
+| `CHANGELOG.md:153-157` | "exists only for the **generic CSV path** (`loader.py:441`) and the built-in synthetic sample… **A generic-CSV caller does get the over-inclusive fallback.**" |
+
+That CHANGELOG entry cites `loader.py:441` and `loader.py:523` exactly, which is what
+makes it worth re-deriving rather than dismissing: it located both call sites
+correctly and then mis-described what the first is reachable *from*.
+
+**And the repository already contradicts itself about this, three sites to three.**
+The same three files say the branch is dead:
+
+| Site (`main` at `3feb601`) | Text |
+|---|---|
+| `CHANGELOG.md:323` | "**The retired `.xlsx` path** ran `_compute_eligibility()`…" |
+| `CHANGELOG.md:509` | "…the only mapping that could set it (`"NATIVE_AREA"`) lives on **the `.xlsx` branch the live URL never takes**" |
+| `nmtcmapper/data/schema.py:201` | "…`ELIGIBILITY_FILE_COLUMNS` (**which describes the retired `.xlsx` path**)" |
+
+The three "generic CSV path" sentences and these three cannot both be true of the
+same branch. **The second set is right**, and `CHANGELOG.md:509` states the mechanism
+precisely — the live URL never takes that branch — which is the whole of §M6.1's
+result, already in the repository, one file away from the claim that contradicts it.
+
+**§M8.3(c) already instructs 0.5.0 to strike this clause from the README. That
+instruction now has three sites, not one**, and the two sentences asserting a live
+caller are the load-bearing half, because a maintainer reading `schema.py` is being
+told the defect is live today. The rest of the 0.4.3 text is correct and must survive
+the edit verbatim: `severe`/`deep` on the `.xlsb` path are read from the Fund's
+published columns 14/15, so **no official-path verdict is affected, and §M7's
+invariants are untouched.** This correction is about who can reach a dead rule. It is
+not a finding about any answer the package gives a user today.
+
+Three further qualifications, none of which depend on reachability:
 
 1. **`load_sample_table` is in `__all__`.** Sample-only is not private. The wrong
    rule is exported, importable, and reachable from a documented constructor.
@@ -848,6 +964,21 @@ qualifications:
    maintainers about where `is_nmtc_native_area` could come from — directly relevant
    to §M2 — and that removing it is not a behaviour change, because nothing reaches
    it.
+
+   **Resolve these two line numbers before you cut.** They are stated against this
+   branch, and **0.4.3 moved `schema.py` by +34 lines** at that point:
+   `ELIGIBILITY_FILE_COLUMNS` is at `schema.py:129` here and at **`schema.py:163`** on
+   `main` at `3feb601`; the back-reference is at `:167` here and **`:201`** there.
+   `loader.py` is byte-identical between the two, so every `loader.py:NNN` citation in
+   this document — including `:441`, `:523`, `:466`, `:471` and `:473-480` — holds on
+   both. **Treat every `schema.py:NNN` in this document as branch-relative and
+   re-resolve it by symbol name.** The one place already written against `main` is
+   §M8.3, which cites `3feb601` explicitly each time.
+
+   The dead branch is also not a new discovery to the package itself: the comment at
+   `schema.py:167` (`:201` on `main`) already describes `ELIGIBILITY_FILE_COLUMNS` as
+   the dict "which describes the retired `.xlsx` path." The retirement is recorded in
+   three places in this repository and contradicted in three others (§M6.1a).
 
 ### M6.2 How wrong the rule is, measured
 
@@ -875,11 +1006,65 @@ MFI<=60%;Unemployment>=1.5)"* and column 15 *"Deep distress=**LIC AND**
 to QLICIs, and a QLICI is by definition in a Low-Income Community under
 §45D(e)(1) — distress is a tier *within* eligibility, never a route into it.
 
-Measured: the current rule marks **5,197 non-LIC tracts severely distressed** and
-**751 non-LIC tracts deeply distressed**. Adding the conjunction (with (3) below)
-takes severe from 5,238 disagreements to **20**, and deep from 767 to **3** — and
-those residual 20 and 3 are the known artefact of the July-2026 re-publish widening
-column C without recomputing O and P, already documented in `schema.py`.
+**This is the largest of the three divergences, and it is the one to lead with.**
+`>=` versus `>` moves the boundary population — 21 severe and 13 deep tracts
+(§M6.3(3)). The missing conjunct moves two orders of magnitude more, so the ordering
+is stated explicitly rather than left to the reader: *the missing `AND LIC` term is
+how this rule differs from the Fund's; `>=` is a rounding error beside it.* Through
+0.4.2 the constants in `schema.py` carried no divergence caveat at all; 0.4.3 added
+one and got the ordering right, stating both and naming the conjunct as the larger
+(`schema.py:86-102`, `CHANGELOG.md:141-158` on `main`). This section is the
+derivation behind that ordering, and the measurement it was missing.
+
+Measured on the live 85,395 rows, feeding the Fund's own metric columns through
+`_compute_eligibility()` unchanged:
+
+| Quantity | Count |
+|---|---|
+| Flagged `severe_distress` by the rule, **not LIC** | **5,197** |
+| Flagged `deep_distress` by the rule, **not LIC** | **751** |
+| Flagged **severe *or* deep**, not LIC | **5,197** |
+| …carried by the **unemployment prong alone** | **5,197** (100%) |
+| …carried by the poverty prong | **0** |
+| …carried by the MFI prong | **0** |
+
+Three notes on reading that table, each re-derived this session.
+
+**The union equals the severe count because deep is a subset of severe under this
+rule.** Every deep prong is strictly tighter than its severe counterpart
+(`pr >= 0.40 ⟹ pr >= 0.30`; `ami <= 0.40 ⟹ ami <= 0.60`; `unemp >= 2.5× ⟹ >= 1.5×`),
+and a NaN fails both, so `deep & ~severe` is **0 rows**. **5,197 is therefore the
+whole population, not a component of it** — the single number the 0.5.0 fix is worth.
+
+**The 5,197 is invariant to which LIC column defines "not LIC."** Against the Fund's
+column C alone and against column C `OR` column N (the 0.4.2 verdict, §M1) the count
+is 5,197 either way; against the rule's *own* over-inclusive `nmtc_eligible` it is
+5,063, the 134-row difference being tracts the rule wrongly admits to LIC through the
+non-metro band of defect (2).
+
+**That 100% is the structural argument turned into a measurement.** Poverty `>= 30%`
+implies poverty `>= 20%`, and MFI `<= 60%` implies MFI `<= 80%`, so those two prongs
+cannot fire outside LIC — they *are* LIC conditions. Unemployment is the only prong
+with no LIC implication, which is exactly why the missing conjunct is not a boundary
+effect but a hole with a shape: **every one of the 5,197 is a tract admitted to a
+distress tier purely on unemployment, with poverty under 20% and MFI over 80%.**
+
+**And the missing conjunct reaches the user-visible label, not just the two boolean
+columns.** `distress_label` (`loader.py:473-480`, applied at `:482`) tests
+`deep_distress`, then `severe_distress`, and only then `nmtc_eligible` — so a `True`
+in either distress column short-circuits before the LIC check is ever consulted.
+`nmtc_eligible` is `False` for **5,063** of the 5,197 and the label reads `"deep"` or
+`"severe"` anyway. Measured on those rows: **4,446 render `distress_level="severe"`
+and 751 render `"deep"`.** A caller who never touches the boolean columns and reads
+only `distress_level` — which is what `summary()` and the skill's worked examples
+print — sees the defect in full. **Any 0.5.0 fix that AND-s LIC into the two boolean
+columns fixes the label as a side effect; a fix applied to the columns' consumers
+would not.**
+
+Adding the conjunction (with (3) below) takes severe from 5,238 disagreements to
+**20**, and deep from 767 to **3** — and those residual 20 and 3 are the known
+artefact of the July-2026 re-publish widening column C without recomputing O and P,
+already documented in `schema.py`.
 
 **One negative search, recorded here so it is not run a third time.** Neither
 **26 U.S.C. §45D** nor **Treas. Reg. §1.45D-1** contains the term "distress" in any
@@ -1160,22 +1345,70 @@ Island Areas framing. This document must not specify that work a second time —
 releases editing the same README lines from two different decision documents is
 exactly how a superseded number gets reintroduced by the later one.
 
-**So this item becomes a verification step, and it gates the 0.5.0 build.** Before
-0.5.0 touches the README at all, the build session must confirm that 0.4.3's
-corrections are **present on `main`** — not merely authored, not merely committed on a
-branch. At the time of writing they are **not**: the branch `fix/0.4.3-docs-accuracy`
-exists and sits at `1485923`, the same commit as `main` and as the annotated tag
-`v0.4.2`, with **zero commits of its own**, and README:141-143 still carries the
-superseded values. The check is concrete and cheap: `git log main --oneline` shows the
-0.4.3 commits, and a grep of `main`'s README finds `MFI <= 40%` and `2.5x` and finds no
-`MFI <= 50%` or `>= 2x`. If that check fails, 0.5.0's README work waits — because the
-0.5.0 rewrite of the Output Columns table and the Known Issues section would otherwise
-be written on top of, and would silently re-assert, the wrong criteria.
+**So this item became a verification step gating the 0.5.0 build — and the gate is
+now DISCHARGED.** When this section was written the corrections were *not* on `main`:
+the branch `fix/0.4.3-docs-accuracy` sat at `1485923`, the same commit as `main` and
+as the annotated tag `v0.4.2`, with zero commits of its own. **0.4.3 has since
+shipped.** Re-checked this session against `main` at `3feb601` (tag `v0.4.3` at
+`3feb601`; PyPI latest confirmed `0.4.3`, queried, not assumed):
+
+| Gate condition | State on `main` at `3feb601` |
+|---|---|
+| Severe poverty stated as **`> 30%`**, not `>= 30%` | **Present** — `README.md:141` |
+| Deep poverty stated as **`> 40%`**, not `>= 40%` | **Present** — `README.md:142` |
+| Deep MFI corrected `<= 50%` → **`<= 40%`** | **Present** — `README.md:143` |
+| Deep unemployment corrected `>= 2x` → **`>= 2.5x`** | **Present** — `README.md:143` |
+| LIC poverty prong still **`>=`**, with the split explained rather than reconciled | **Present** — `README.md:152-159`: "LIC uses *at least*; distress uses *strictly greater*. That difference is deliberate — do not reconcile it." Backed by the 83 / 29 boundary population and the 21 / 13 discriminating counts |
+| No surviving `MFI <= 50%` or `>= 2x` anywhere | **Confirmed** — zero matches |
+| Native Areas stated as **Deep** Distress | **Present** — `README.md:227-239`, citing FAQ Q32 item 2 |
+| Island Areas limitation section, **133** tracts | **Present** — `README.md:174-193` (18 / 57 / 26 / 32 across FIPS 60 / 66 / 69 / 78), with Puerto Rico's 981 rows distinguished as in-criterion and in-file |
+
+**The 0.5.0 build inherits this gate closed and must not re-perform the work.** Two
+things it must still know, because both are traps rather than remainders:
+
+**(i) One `Areas of Higher Distress` occurrence survives at `CHANGELOG.md:514`, and it
+must not be edited.** It sits in the historical **0.4.1** entry. 0.4.3 corrected that
+entry *forward* — the 0.4.3 entry at `CHANGELOG.md:66-77` states the correction and
+says why the old text stays: `CHANGELOG.md` ships inside the published 0.4.1 and 0.4.2
+sdists, which are immutable, so rewriting a historical entry would silently diverge
+this repo from artifacts PyPI is still serving. A build that greps for the phrase and
+"finishes the job" would reintroduce a defect this portfolio has already made and
+reverted once. The remaining occurrence at `CHANGELOG.md:70` is a *correct* use — it
+names Q31's eleven Higher Distress resources in order to exclude Native Areas from
+them.
+
+**(ii) The rendered documentation site is gone.** `gh-pages` has been deleted from the
+remote — `git ls-remote --heads origin` returns `refs/heads/main` and nothing else —
+and `https://jaypatel1511.github.io/nmtc-mapper/`, the `site_url` still declared in
+`mkdocs.yml:3`, returns **404** (both checked this session). A stale local `gh-pages`
+branch remains in at least one clone and is not the published state. Nothing in this
+document instructs a build to update a docs site, and no such instruction should be
+inferred from `mkdocs.yml` or from the tracked `site/` directory: 0.4.3 rebuilt and
+committed `site/` to fix the stale artifact, and its own CHANGELOG entry
+(`CHANGELOG.md:159-168`) records that **nothing builds or deploys it** and that the
+mechanism is unfixed. `site/` is a committed build product behind no gate, not a
+publication target.
 
 **(c) "`_compute_eligibility` exists only for the generic CSV path and the built-in
-synthetic sample" (README:144).** There is no generic CSV path — §M6 proves the
-`.xlsx`/`_process_eligibility_table` branch is unreachable. Fix to "the built-in
-synthetic sample only," or delete the clause with the dead branch.
+synthetic sample" — now at three sites, not one.** There is no generic CSV path:
+§M6.1 establishes by execution that `loader.py:441` is reachable only by rebinding two
+module-private names, and that the branch calls `pd.read_excel`, so a CSV could not
+traverse it even then. Fix to "the built-in synthetic sample only," or delete the
+clause together with the dead branch.
+
+**This item grew rather than closed.** When it was written the claim sat at one
+README line. 0.4.3 propagated it, and on `main` at `3feb601` all three of these must
+be corrected by 0.5.0:
+
+| Site | What to do |
+|---|---|
+| `README.md:161-163` | Strike "the generic CSV path and"; keep "**not** used for the official file" |
+| `nmtcmapper/data/schema.py:98-101` | Strike the same clause **and** the sentence "A generic-CSV caller DOES get the over-inclusive fallback." Keep every other line of that comment — the two-way divergence, the prong analysis, and "no official-path verdict is affected" are all correct |
+| `CHANGELOG.md:153-157` | **Correct forward in the 0.5.0 entry; do not edit in place.** This text ships inside the published 0.4.3 sdist, so the same immutability rule that governs the Native Areas entry (§M8.3b(i)) governs this one |
+
+The replacement claim, stated once so all three sites can be made to agree: *the
+rule backs the built-in synthetic sample only; the generic branch that also calls it
+is unreachable dead code slated for deletion in 0.5.0.*
 
 **(d) The Output Columns table is incomplete.** It lists nine columns;
 `enrich_dataframe()` writes **ten** eligibility columns plus `eligibility_status` —
@@ -1187,11 +1420,28 @@ is available from the batch path — it is not (§M4.1). This item is an instruc
 rewrite that table, so the corrected count propagates into the README rather than
 staying here.
 
-**(e) Native Areas is categorised as *Areas of Higher Distress*** in README:192,
-CHANGELOG 0.4.1, and the skill. Per FAQ Q32 it is enumerated under **Areas of Deep
-Distress** (§M2.3). The README and CHANGELOG halves move to **0.4.3** with item (b);
-the skill half stays with 0.5.0 and is specified at §M9.2 (the 268-272 row). 0.5.0
-**verifies** the first two on `main` rather than performing them.
+**(e) Native Areas was categorised as *Areas of Higher Distress*** in README:192 and
+the CHANGELOG's 0.4.1 entry. Per FAQ Q32 it is enumerated under **Areas of Deep
+Distress** (§M2.3). **Both halves are done, and the third half never existed.**
+
+- **README** — corrected on `main` at `3feb601`; now states *Areas of **Deep**
+  Distress* with the Q32 item-2 citation at `README.md:227-239`. Verified above.
+- **CHANGELOG** — corrected **forward** in the 0.4.3 entry (`CHANGELOG.md:66-77`),
+  which explicitly leaves the wrong text standing in the historical 0.4.1 entry at
+  `CHANGELOG.md:514` and says why. **Do not edit that line** — see §M8.3(b)(i).
+- **The skill** — as first written this item, §M2.3, and ledger row 14 all named the
+  `nmtc-eligibility` skill as a third site. **That was false.** At
+  `cdfi-superpowers@4705124`, `"Areas of Higher Distress"` and case-insensitive
+  `"higher distress"` each return **zero** matches across all tracked files; the skill
+  makes no distress-tier claim about Native Areas anywhere.
+
+**0.5.0 performs nothing under this item.** Left uncorrected, the sentence this
+replaces would have dispatched the build — via §M9, the part of this document most
+likely to be executed literally — to "fix" a repository that is already right. The
+§M9.2 `268-272` row is unaffected and remains correct: it deletes the
+`is_nmtc_native_area` paragraph as part of the field drop and its replacement text
+already says *Areas of Deep Distress*. That row is a consequence of §M2, not of this
+one.
 
 **(f) Two stale "114 tests" references in `docs-check.toml`**, not one.
 `docs-check.toml:120` claims *"assertion 3 — the '114 tests' claim matches
@@ -1268,7 +1518,7 @@ compensates for it in prose.
 | **237-243** — "Do not repeat the `Opportunity Zone: No` line as fact" | Compensates for `summary()` printing a bare `No` | **Rewrite.** `summary()` no longer prints `No`; it prints `❓ NOT CONFIRMED …`. The rule becomes "report the line as printed" — which is the point of the release |
 | **217-232** — the worked-example `summary()` block for `36005023702` | Shows `Opportunity Zone: No` | **Re-execute against 0.5.0 and paste the actual block.** Expected: `❓ NOT CONFIRMED — …`. Do not hand-edit — the skill's convention is executed output |
 | **336-347** — the absent-tract `summary()` block for `36061980000` | Shows `Non-Metro: No`, `Opportunity Zone: No`, `High Migration: No` on a tract the package never read | **Re-execute.** All three become `❓ UNKNOWN — tract not read`. This block is the skill's teaching case for the third state and currently ends with three fabricated negatives underneath the correct `❓ UNKNOWN` verdict |
-| **186-200** — the Island Areas scope hole | Correct and already present | **Keep, and cross-reference from the OZ rule** (§M1.2): 75 of the 1,408 unmatched OZ designations are Island Area tracts, not vintage misses |
+| **186-200** — the Island Areas scope hole | Correct and already present (re-verified at `4705124`) | **Keep, and cross-reference from the OZ rule** (§M1.2): 75 of the 1,408 unmatched OZ designations fall in Island Areas rather than being vintage misses. Do not import that 75 into this passage as a tract count — the scope hole is **133** tracts on 2020 geography |
 | **88-115** — the tri-state section | Covers `nmtc_eligible` only | **Extend.** State that `Optional[bool]` is now the package's general contract for any field that can be unobtainable, list the six tri-state fields, and state the rule that ties them together: when `eligibility_status ∈ {not-found, geocode-failed}`, every tract-derived boolean is `None` |
 | **537-540** — the NaN rule | "the tract is genuinely `False`/verified-ineligible; only its demographics are null" | **Keep verbatim.** §M3.1(b) re-verified it: the Fund publishes a determination for null-demographic tracts, so `11001980000`'s `False` is a real `NO`. This is the one place a `False` next to nulls is correct, and the skill already says why |
 
@@ -1278,6 +1528,18 @@ The third-state rule (127-149), the hard failure rule (117-125), and the
 vintage-scope rule (151-200) are unaffected. 0.5.0 makes the package **conform** to
 the third-state rule rather than requiring the skill to enforce it against the
 package — the rule's text does not need to move for that to be true.
+
+**And one non-change that has to be written down, because an earlier draft of this
+document instructed the opposite.** There is **no Native Areas distress-tier
+correction to make in `cdfi-superpowers`.** Verified at `4705124` across all tracked
+files: `"Areas of Higher Distress"` → **0** matches; case-insensitive
+`"higher distress"` → **0** matches. §M2.3, §M8.3(e) and ledger row 14 each named the
+skill as carrying the *Higher*-for-*Deep* mis-categorisation and each was wrong; all
+three are corrected. The only Native Areas edit in this sync is the `268-272` row
+above, which deletes the paragraph as part of the field drop — a consequence of §M2,
+not of a mis-categorisation. **A build that greps `cdfi-superpowers` for "Higher
+Distress" will find nothing; that is the expected result, not a failed search to
+widen.**
 
 ### M9.4 Sequencing
 
@@ -1297,7 +1559,7 @@ twenty-third:
 
 | # | Claim | Finding |
 |---|---|---|
-| 1 | `_compute_eligibility()` reaches only the sample path *(flagged as relayed)* | **Confirmed by execution** (§M6.1). Zero calls from two live loads; both calls from `load_sample_table`. The stronger fact the brief did not have: `_process_eligibility_table` is *structurally* unreachable, so it is dead code, not merely unused |
+| 1 | `_compute_eligibility()` reaches only the sample path *(flagged as relayed)* | **Confirmed by execution at both call sites** (§M6.1). There are two — `loader.py:523` in `load_sample_table()` and `loader.py:441` in `_process_eligibility_table()`. Zero calls from two live loads; every observed call came through `:523`. The second site was then driven directly, because a trace of successful loads cannot see it: it is reachable only by rebinding two module-private names, and the branch calls `pd.read_excel`, so no CSV traverses it either. The stronger fact the brief did not have: `_process_eligibility_table` is *structurally* unreachable, so it is dead code, not merely unused |
 | 2 | `main` is at `1485923` | **Correct**, and it is the commit the annotated tag `v0.4.2` points to (`git rev-parse v0.4.2` returns `2cb163d`, the tag *object*, which is why the SHAs look different). But it is **not a merge** — `1485923` has one parent and the 0.4.2 work landed linearly. The last merge on `main` is `5a4728a` (`chore/docs-check-gate`) |
 | 3 | M3's boolean list is complete | **Incomplete in the direction that mattered.** The eight named fields are real, but the defect is not per-field — it is per-*branch*. Both indeterminate branches set six booleans to `False`. Nine fields swept, six change (§M3.5) |
 | 4 | `summary()` at `checker.py:94` is the only rendering site | **Three sites in `summary()`, not one** — lines 91, 94, 95 all use the `'Yes' if x else 'No'` ternary and all three fields become tri-state |
@@ -1306,11 +1568,11 @@ twenty-third:
 | 7 | The twelve docs-check entries "are not one kind of thing" | **They are.** All twelve are `readme-missing-symbol` assertion-6 omissions, all documentation-only (§M8.1) |
 | 8 | The "10,000 addresses" claim is one of the twelve | **It is not in the ledger at all.** `docs-check.toml` explicitly excludes prose claims from the gate's scope, so it is a thirteenth item the gate structurally cannot see — which makes it *more* dangerous, not less |
 | 9 | `eligible_count` / `eligible_tract_count` — "one should go" | **Neither should.** A method over a user DataFrame and a property over the loaded table (§M8.4). The real defect is that `eligible_count` returns a summary, not a count |
-| 10 | "1,408 vintage misses" | **1,408 confirmed, but it is three causes:** 1,332 vintage retirements, **75 Island Area tracts** the Fund's table never covers at any vintage, and 1 GEOID (`51019050100`) invalid at both vintages (§M1.2). The package README asserts one cause for all of them |
+| 10 | "1,408 vintage misses" | **1,408 confirmed, but it is three causes:** 1,332 vintage retirements, **75 designations in Island Areas** the Fund's table never covers at any vintage, and 1 GEOID (`51019050100`) invalid at both vintages (§M1.2). 75 counts *OZ designations on 2010 geography*, not tracts — the four jurisdictions hold 133 tracts on 2020 geography. The package README still asserts one cause for all 1,408 (`README.md:218-219` on `main`) |
 | 11 | "A `True` is trustworthy" — stated as settled | **True as a claim about the designation list; qualified as a claim about ground.** 527 of 7,356 matched GEOIDs (7.2%) are 2020 tracts drawing under 99% of their land from the same-numbered 2010 tract; the worst is 12.4% (§M1.3) |
 | 12 | The crosswalk exclusion is weaker here than in `hmda-analyzer` | **It is stronger, for a different reason.** Not maintenance — 38.7% of the successor tracts a crosswalk would produce also contain never-designated 2010 territory, so every extra answer would be an inference presented as a legal designation (§M1.5) |
 | 13 | Q31 enumerates 11 resources, Native Areas absent | **Verified, from the document's own header.** But **Q32 names "NMTC Native Areas" explicitly** as one of four *Areas of Deep Distress* criteria in the CY 2024-2025 Application, so "no source exists or is coming" overstates it — the correct claim is that the Fund publishes no tract-keyed lookup while treating it as a live compliance category (§M2.3) |
-| 14 | Native Areas is an *Areas of Higher Distress* criterion (README, CHANGELOG, skill all say so) | **Mis-categorised.** FAQ Q32 places it under **Areas of Deep Distress** |
+| 14 | Native Areas is an *Areas of Higher Distress* criterion (README, CHANGELOG, skill all say so) | **Mis-categorised, and the brief's site list was over-broad.** FAQ Q32 places it under **Areas of Deep Distress**. But "skill" is wrong: at `cdfi-superpowers@4705124`, `"Areas of Higher Distress"` and case-insensitive `"higher distress"` both return **zero** matches across all tracked files. The README and CHANGELOG halves were real and are **corrected on `main` at `3feb601`** (§M8.3b, §M8.3e) |
 | 15 | "all three [`_compute_eligibility` defects] are over-inclusive" | **True, but `>=` vs `>` is correct for LIC.** §45D(e)(1)(A) says "at least 20 percent," so `pr >= 0.20` must not change. Only the severe and deep poverty prongs are wrong (§M6.3) |
 | 16 | The 85% band defect described as "`is_non_metro` standing in for the 85% band" | **It is two errors, not one:** non-metro tracts get the wrong *threshold* (85% instead of 80%), and the high-migration-rural restriction is missing. 13,841 non-metro tracts vs 1,422 HMR. The first correction of this then introduced a third error in the same direction — see §10.1, finding 24 |
 | 17 | `is_opportunity_zone` becomes `None` "otherwise" | **Needs one carve-out.** `check_tract()` on a retired 2010 GEOID returns `True` with `tract_found=False` — the OZ answer is *more* complete than the eligibility answer there, and a naive "None unless found" would destroy a correct `True` (§M1.4) |
@@ -1328,12 +1590,13 @@ and are absent from the README in every form. And the brief's "140 tests" is
 correct (collection confirms 140), though `docs-check.toml`'s own comment still
 describes a "114 tests" claim.
 
-### 10.1 What this document got wrong — findings 24 to 26
+### 10.1 What this document got wrong — findings 24 to 29
 
 The table above is the *brief's* errors. This section records the document's own,
 because the same rule applies to it, and because a build reading this file needs to
 know which of its claims moved after the hostile audit. Finding 24 is the audit's;
-25 and 26 were found while executing its remedy.
+25 and 26 were found while executing its remedy; **27 to 29 were found in the 0.4.3
+cycle, after the audit, and are the reason this revision exists.**
 
 | # | Claim as first written | Finding |
 |---|---|---|
@@ -1341,13 +1604,30 @@ know which of its claims moved after the hostile audit. Finding 24 is the audit'
 | **25** | §M6.3(3)'s deep discriminating count: **12** | **It is 13**, and the document's own arithmetic said so — it quoted 3 disagreements under `>` and 16 under `>=`, and 16 − 3 = 13. The omitted tract is `22071980000`, dropped for a null MFI on reasoning that does not survive contact: both hypotheses predict opposite answers for it and the Fund published `NO`, so it discriminates exactly as the other twelve do (§M6.3(3)) |
 | **26** | §M1.5(b): "OZ 2.0 designations under OBBBA §70421 are expected in 2027 **on a *newer* basis again**" | **Same basis, different scheme — and the clause was uncited.** Rev. Proc. 2026-14 §3.01(3) fixes OZ 2.0 eligible-tract boundaries to those "established for the 2020 decennial census", the basis this package already uses, while Treasury's rural methodology (S4 fn.10) directs readers to the **2024 TIGER** tract map. OZ 2.0 would therefore *not* obsolete a 2010↔2020 crosswalk, so that half of ground (b) does not hold as written. Ground (a) — the 38.7% mixed-descent measurement — is load-bearing and unaffected (§M1.5b) |
 
-Two of the three are the same failure in different clothes, and it is worth naming
+| **27** | §M2.3, §M8.3(e) and ledger row 14: the `nmtc-eligibility` skill calls Native Areas an *Areas of Higher Distress* criterion | **The skill never said it.** At `cdfi-superpowers@4705124`, across all tracked files, `"Areas of Higher Distress"` returns **0** matches and case-insensitive `"higher distress"` returns **0**. The README and CHANGELOG halves were real; the third site was invented and then repeated in three places, one of which (§M8.3e) feeds §M9 — the part of this document a build is most likely to execute verbatim. **The failure mode is new to this list and worse than a wrong number: a false claim about another repository becomes a sync instruction to break a correct one.** A claim that some set of files "all say" a thing is a claim about each of them and has to be grepped per file, not asserted from the pattern (§M9.3) |
+| **28** | §M6.1's reachability result, and the ranking that rests on it | **The conclusion was right; the method could not have established it.** An instrumented call-stack trace of two successful live loads observes only the call sites those loads take, and `_compute_eligibility` has **two** — `loader.py:523` and `loader.py:441`. The trace saw one and the section read as though it had cleared both. Driving the second directly confirms it is unreachable, so the priority ranking stands — but it stands on an executed result now rather than on an unstated assumption. Recorded because 0.4.3 reached the opposite conclusion about the same branch and shipped it to three sites (§M6.1a, §M8.3c) |
+| **29** | §M1.2: "the 75 uncovered **tracts** are the four non-PR Island Areas" | **75 counts OZ designations, not tracts.** It is 2018 designations on 2010 geography from the designation file (16 / 25 / 20 / 14), correct as a slice of the 1,408 and wrong as a measure of the coverage hole, which is **133 tracts** on 2020 geography (18 / 57 / 26 / 32). Two counts from two files with two vintages, one label. This document originated the error; 0.4.3's README states 133 correctly (§M1.2, §M8.3b) |
+
+Two of findings 24 to 26 are the same failure in different clothes, and it is worth naming
 because it is the one this document is structurally prone to: **a number or a clause
 carried alongside evidence that does not reach it.** The zero-disagreement fit is real
 and reaches the 80/85 split; it does not reach the non-metro conjunct. The 38.7%
 measurement is real and reaches the crosswalk exclusion; it does not reach the OZ 2.0
 sentence sitting next to it. Adjacency to strong evidence is not support, and both
 survived several passes because they were standing next to something true.
+
+**Findings 27 to 29 are a second pattern, and it is the more dangerous one here: a
+claim about something outside this repository, asserted rather than executed against
+it.** 27 is a grep never run against `cdfi-superpowers`; 29 is a count lifted from the
+OZ designation file and re-labelled as tracts; 28 is a conclusion about a call site no
+executed path had touched. Each was individually plausible and each would have been
+caught in seconds by running the check it was standing in for. **This document's
+authority comes from execution, so every claim it makes about another repository, a
+second file, or an unexercised branch is a liability until the command is run — and
+the sync spec in §M9 is where that liability turns into an instruction.** The three
+checks are cheap enough to state as a standing rule for whoever revises this next:
+grep the target repo at the pinned commit, name the file each count comes from, and
+drive the branch you are characterising.
 
 ---
 
@@ -1362,7 +1642,8 @@ Stated so the audit can check the boundary rather than infer it.
   design against `TRACT_VINTAGE`, and is a feature — deferred, and named here so it
   is not mistaken for an oversight.
 - **No Island Areas file.** `NMTC_LIC_Territory_2020_December_2023.xlsx` is not
-  loaded. The 75 Island Area OZ tracts stay `None`, and the skill keeps routing those
+  loaded. All **133** tracts in FIPS 60 / 66 / 69 / 78 stay outside the universe —
+  including the **75 OZ designations** among them — and the skill keeps routing those
   addresses to CIMS. The deferral stands for 0.5.0, but **the CHANGELOG must name it
   for what it is**: FAQ Q32 item 4 makes *US Island Areas* one of the four Areas of
   Deep Distress criteria (§M1.2), so this is a deferred gap in a **named federal
