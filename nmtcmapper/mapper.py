@@ -222,6 +222,21 @@ class NMTCMapper:
         """
         Summarize NMTC eligibility across a DataFrame.
         Requires df to have 'nmtc_eligible' and 'distress_level' columns.
+
+        THE PERCENTAGE IS OVER `determined`, NOT OVER `total` (0.5.0). A rate
+        needs a named denominator, so the denominator is returned as its own key
+        and named on the printed line. `pct_eligible` — which divided by `total`
+        — IS REMOVED; reading it now raises KeyError. See the CHANGELOG's
+        UPGRADING table.
+
+        Returns a dict with:
+            total                       int    rows in the frame
+            determined                  int    eligible + ineligible
+            indeterminate               int    None verdicts (no match / absent)
+            nmtc_eligible               int    verified eligible
+            ineligible                  int    verified ineligible
+            pct_eligible_of_determined  Optional[float]  None when determined == 0
+            deep_distress / severe_distress / lic_only   int
         """
         if "nmtc_eligible" not in df.columns:
             raise ValueError("Run .enrich() first to add eligibility columns.")
@@ -235,14 +250,38 @@ class NMTCMapper:
         eligible = int((col == True).sum())
         ineligible = int((col == False).sum())
         indeterminate = int(total - eligible - ineligible)  # None / not-found / geocode-failed
+        determined = eligible + ineligible
         deep = int((df["distress_level"] == "deep").sum())
         severe = int((df["distress_level"] == "severe").sum())
         lic = int((df["distress_level"] == "lic").sum())
 
+        # THE DENOMINATOR IS `determined`, AND THAT IS THE WHOLE POINT (0.5.0).
+        # Through 0.4.3 this read `eligible / total`, which folds every
+        # indeterminate row into the denominator — the identical fabrication the
+        # comment three lines above forbids for the COUNT, committed in ratio
+        # form on the one line a user pastes into a memo. On 1 eligible / 1
+        # ineligible / 8 indeterminate it reported 10.0% where the eligible share
+        # of what was actually determined is 50.0%: five times low, and depressed
+        # by geocoding coverage rather than by eligibility. `eligible / total`
+        # can only be read as "the other 90% are not eligible", which is a
+        # verdict for eight rows no row was read for.
+        #
+        # None, NOT 0.0, when nothing was determined. `0.0` asserts "none of the
+        # determined rows are eligible" about an empty set — a fabricated
+        # statistic, and exactly what 0.4.3 returned for an all-indeterminate
+        # frame. A caller who wants the old lower-bound reading can still compute
+        # `nmtc_eligible / total` from two returned keys; the reverse direction
+        # was not recoverable, which is why this is the default.
+        if determined:
+            pct_determined = round(eligible / determined * 100, 1)
+        else:
+            pct_determined = None
+
         result = {
             "total": total,
+            "determined": determined,
             "nmtc_eligible": eligible,
-            "pct_eligible": round(eligible / total * 100, 1) if total else 0,
+            "pct_eligible_of_determined": pct_determined,
             "deep_distress": deep,
             "severe_distress": severe,
             "lic_only": lic,
@@ -250,15 +289,25 @@ class NMTCMapper:
             "indeterminate": indeterminate,
         }
 
+        # The denominator is named INLINE on the headline, never in a footer, for
+        # the same reason every tri-state qualifier is: this is the line that gets
+        # copied out on its own. A bare "(50.0%)" is the fabrication in a
+        # different font.
+        if pct_determined is None:
+            headline = f"0 of 0 determined (no rate — nothing was determined)"
+        else:
+            headline = f"{eligible:,} of {determined:,} determined ({pct_determined}%)"
+
         print(f"\nNMTC Eligibility Summary")
         print(f"{'='*40}")
         print(f"  Total addresses:    {total:,}")
-        print(f"  NMTC Eligible:      {eligible:,} ({result['pct_eligible']}%)")
+        print(f"  ── Determined:      {determined:,} (verified eligible or verified ineligible)")
+        print(f"  ── Indeterminate:   {indeterminate:,} (no match / tract absent — NOT ineligible)")
+        print(f"  NMTC Eligible:      {headline}")
         print(f"  ── Deep Distress:   {deep:,}")
         print(f"  ── Severe Distress: {severe:,}")
         print(f"  ── LIC Only:        {lic:,}")
         print(f"  Not Eligible:       {ineligible:,}")
-        print(f"  Indeterminate:      {indeterminate:,} (no match / tract absent — NOT ineligible)")
         print()
         return result
 

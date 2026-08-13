@@ -88,18 +88,41 @@ LIC_AMI_RATIO_RURAL_THRESHOLD  = 0.85   # <= 85% of state AMI (high migration ru
 #
 #   1. It compared poverty with `>=` against BOTH of these constants, so it was
 #      marginally over-inclusive at exactly 30.0% / 40.0%.
+#      NAME THE BASELINE. "Marginally over-inclusive" is measured against the
+#      Fund's published columns 14/15, which are the only YES/NO the boundary
+#      rows can be scored against: 21 LIC tracts sit at exactly 30.0% poverty
+#      qualifying on poverty alone and the Fund published severe=NO for all 21;
+#      13 at exactly 40.0% with deep=NO for all 13.
 #   2. It computed severe_distress / deep_distress as the OR of the three prongs
 #      with NO AND-LIC term, while the Fund's headers read
 #      `Severe distress=LIC AND (...)`. The poverty and MFI prongs imply LIC on
 #      their own; the unemployment prong does not. So a tract at >= 1.5x national
 #      unemployment with poverty < 20% and AMI > 80% was flagged severe and is
-#      NOT severe under the criterion. Measured by feeding the Fund's own metric
-#      columns through the shipped rule: 5,197 of the live 85,395 rows were
-#      flagged severe or deep while NOT LIC, and every one of them was carried by
-#      the unemployment prong alone — poverty 0, MFI 0. That 100% is the
-#      structural argument as a measurement: poverty >= 30% implies poverty >=
-#      20%, and MFI <= 60% implies MFI <= 80%, so those two prongs cannot fire
-#      outside LIC. Unemployment is the only prong with no LIC implication.
+#      NOT severe under the criterion.
+#
+#      TWO MEASUREMENTS, TWO BASELINES, BOTH CORRECT — AND THEY ARE NOT THE SAME
+#      QUANTITY. Both feed the Fund's own metric columns through the shipped rule
+#      over the live 85,395 rows; they differ only in what "NOT LIC" is read from,
+#      and quoting either without naming its baseline is what makes them look like
+#      two different metrics:
+#
+#        * against the Fund's PUBLISHED LIC column C: 5,197 rows flagged severe
+#          or deep while not LIC (751 of them deep). This is the CRITERION
+#          baseline — how far the rule departs from the Fund's own definition.
+#        * against the SHIPPED RULE'S OWN LIC output: 5,063 (733 deep). This is
+#          the EXPERIENCED baseline — what a 0.4.3 user actually saw, since a user
+#          reading `severe_distress` read `nmtc_eligible` from the same call.
+#
+#      The two reconcile exactly through defect (2) below: 134 of the 5,197 (18 of
+#      the 751) are rows the shipped rule itself called LIC while the Fund did
+#      not, and all 134 sit inside the 932 tracts that rule granted LIC on
+#      non-metro status alone. 5,197 - 134 = 5,063; 751 - 18 = 733.
+#
+#      Either way, EVERY ONE of them is carried by the unemployment prong alone —
+#      poverty 0, MFI 0. That 100% is the structural argument as a measurement:
+#      poverty >= 30% implies poverty >= 20%, and MFI <= 60% implies MFI <= 80%,
+#      so those two prongs cannot fire outside LIC. Unemployment is the only prong
+#      with no LIC implication.
 #
 # 0.5.0 applies `> 30%` / `> 40%` on the two DISTRESS poverty prongs (the LIC
 # prong stays `>=`, per the paragraph above) and AND-s LIC into both distress

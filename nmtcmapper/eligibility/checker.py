@@ -21,6 +21,49 @@ def _tri(value: Optional[bool]) -> str:
     return "No"
 
 
+# What a demographic rate renders as when the Fund published no value for a tract
+# it DID publish a determination for. Distinct wording from _tri()'s "tract not
+# read", because these are two different states and collapsing them into one word
+# is what made this defect invisible for four releases.
+_NOT_AVAILABLE = "not available — the CDFI Fund published no value for this tract"
+
+
+def _pct(value: Optional[float]) -> str:
+    """Render an Optional[float] rate as a percentage — THREE outcomes (0.5.0).
+
+    TWO KINDS OF MISSING, TWO DIFFERENT WORDS:
+
+    * ``None``  -> "tract not read". The indeterminate branches; no row exists.
+    * ``NaN``   -> "not available". A FOUND tract whose demographic cell the Fund
+      published as ``NA``. The Fund still published a YES/NO determination for it,
+      so the verdict is real and only the metric is missing — 1,583 tracts for
+      poverty and 2,358 for AMI on the live file.
+    * a number  -> the percentage.
+
+    THE GUARD THIS REPLACES WAS WRITTEN FOR THE WRONG SENTINEL. It read
+    ``if self.poverty_rate is not None:`` — correct against the ``None`` the
+    loader emits, and a no-op against what actually arrives, because
+    ``pd.DataFrame(records)`` coerces ``None`` to ``NaN`` in a float column and
+    ``NaN is not None`` is ``True``. Those 1,583 + 2,358 tracts rendered
+    ``nan%``. This is the third instance of the pattern in this portfolio
+    (hmda-analyzer 0.6.0: a ``!= "NA"`` filter that was a no-op because the
+    loader had already produced ``NaN``), so the test here is ``pd.isna`` rather
+    than a second hand-written sentinel check: it catches ``None``, ``np.nan``,
+    ``pd.NA`` and ``pd.NaT`` alike, including whichever null the next pandas
+    version introduces. ``None`` is still tested FIRST, because ``pd.isna(None)``
+    is also True and the two states must not collapse back into one.
+
+    Every line is printed UNCONDITIONALLY. The old guard's else-branch was to
+    omit the line entirely, which is a third rendering of "missing" that a reader
+    cannot distinguish from "I forgot to look".
+    """
+    if value is None:
+        return "❓ UNKNOWN — tract not read"
+    if pd.isna(value):
+        return _NOT_AVAILABLE
+    return f"{value * 100:.1f}%"
+
+
 @dataclass
 class EligibilityResult:
     """Result of a single address NMTC eligibility check.
@@ -51,6 +94,15 @@ class EligibilityResult:
       and geocoder are 2020-basis, so a non-match and a genuine non-designation
       are the same observation. Read ``opportunity_zone_status`` rather than the
       truthiness of the field.
+    - ``poverty_rate``, ``ami_ratio`` and ``unemployment_rate`` HAVE TWO KINDS OF
+      MISSING, and the distinction is part of the contract. ``None`` means no row
+      was read (the two indeterminate branches). ``NaN`` means a FOUND tract whose
+      metric the Fund published as ``NA`` — 1,583 rows for poverty and 2,358 for
+      AMI, all of which still carry a real published YES/NO verdict. So
+      ``r.poverty_rate is None`` is NOT a missing-value test on this field; use
+      ``pd.isna(r.poverty_rate)`` for "no number available either way", and
+      ``eligibility_status`` to tell which kind. ``summary()`` prints two
+      different words for the two states (0.5.0).
     - ``is_nmtc_native_area`` IS REMOVED. It was never obtainable — the CDFI Fund
       publishes no tract-keyed NMTC native-area resource, and AIANNH entities
       carry four-digit GEOIDs with no state or county component, so they cannot
@@ -146,12 +198,13 @@ class EligibilityResult:
         print(f"  NMTC Eligible:    {elig}")
         print(f"  Distress Level:   {self.distress_level.upper()}")
         print(f"  Description:      {self.distress_description}")
-        if self.poverty_rate is not None:
-            print(f"\n  Poverty Rate:     {self.poverty_rate*100:.1f}%")
-        if self.ami_ratio is not None:
-            print(f"  AMI Ratio:        {self.ami_ratio*100:.1f}%")
-        if self.unemployment_rate is not None:
-            print(f"  Unemployment:     {self.unemployment_rate*100:.1f}%")
+        # Three-branch switch via _pct(), printed unconditionally — see _pct's
+        # docstring. `is not None` was the wrong sentinel: the loader's None
+        # becomes NaN inside the DataFrame, NaN is not None, and 1,583 poverty /
+        # 2,358 AMI found tracts rendered `nan%`.
+        print(f"\n  Poverty Rate:     {_pct(self.poverty_rate)}")
+        print(f"  AMI Ratio:        {_pct(self.ami_ratio)}")
+        print(f"  Unemployment:     {_pct(self.unemployment_rate)}")
         # EVERY line below is a three-branch switch, NEVER a ternary on the value.
         # `None` is falsy, so `'Yes' if x else 'No'` would keep printing "No"
         # after the type was fixed — the human-readable block is the thing a user

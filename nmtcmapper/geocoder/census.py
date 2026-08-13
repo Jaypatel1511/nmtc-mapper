@@ -171,8 +171,13 @@ async def _batch_geocode_async(addresses: list) -> list:
     ``return_exceptions``, so a geocoder failure in any row propagates as its
     typed :class:`GeocoderError` and aborts the batch. This is deliberate — the
     previous silent per-row ``None`` became a fabricated "ineligible"
-    downstream, and losing time is strictly better than losing truth. Per-row
-    failure capture is planned for 0.4.1.
+    downstream, and losing time is strictly better than losing truth.
+
+    Per-row failure capture is 0.6.0's, and needs a designed contract rather than
+    a flag: what column carries the error, and how ``eligibility_status`` reports
+    a row that failed TRANSPORT rather than failed to match. (0.4.0 through 0.4.3
+    carried "planned for 0.4.1" here; 0.4.1 and 0.4.2 both shipped without it, so
+    the promise was itself a false claim by the time anyone read it.)
 
     Args:
         addresses: List of address strings
@@ -318,9 +323,16 @@ def geocode_batch(
             tract_ids.append(geocode_address(addr))
         df["tract_id"] = tract_ids
 
-    matched = df["tract_id"].notna().sum()
-    print(f"Geocoded {matched:,}/{total:,} addresses "
-          f"({matched/total*100:.1f}% match rate)")
+    matched = int(df["tract_id"].notna().sum())
+    # An empty batch has no match rate. `matched/total` on total == 0 is a numpy
+    # scalar divide, so it does NOT raise — it returns nan and printed
+    # "nan% match rate", the same degenerate render that 0.5.0 removes from
+    # summary()'s demographic lines. Found by this release's denominator sweep.
+    if total:
+        rate = f"({matched / total * 100:.1f}% match rate)"
+    else:
+        rate = "(no match rate — the batch was empty)"
+    print(f"Geocoded {matched:,}/{total:,} addresses {rate}")
     return df
 
 

@@ -39,11 +39,20 @@ enumerated here instead.
 | `df["is_non_metro"] == False` (after `.enrich()`) | matched metro **and** unresolved rows | matches only rows actually read as `Metro` | Intended. To restore the old set: `df["is_non_metro"] != True` |
 | `df[~df["severe_distress"]]` | included indeterminate rows as "not severe" | `~None` on object dtype → `TypeError` | `df["severe_distress"] != True` |
 | `bool(r.severe_distress)` on an absent tract | `False` | `False` (from `None`) — same value, different meaning | Check `r.eligibility_status` first |
+| `mapper.eligible_count(df).get("pct_eligible", 0)` | the rate over `total` | **`0`** — the key is gone and the default is returned | `out["pct_eligible_of_determined"]`, and handle `None` |
+| reading the printed `NMTC Eligible: … (…%)` line | rate over `total` | rate over `determined` — **50.0% where 0.4.3 printed 10.0%** on the same frame | Intended. The line now names its denominator inline |
+| `if not r.poverty_rate:` on a found tract with `NA` demographics | `False`-y from `NaN` | same value | Unchanged, and still wrong — `NaN` is falsy AND `NaN is not None`. Use `pd.isna()` |
+
+The percentage row is the one to read twice. **`pct_eligible` is removed, so
+`out["pct_eligible"]` raises** (loud, below) — but `.get("pct_eligible", 0)` and
+anything reading the printed line change **value** with no error at all. That is
+why the same change appears in both tables.
 
 **Loud — your code raises, which is the good case:**
 
 | Call shape | New behaviour |
 |---|---|
+| `mapper.eligible_count(df)["pct_eligible"]` | `KeyError` — see "the denominator" under Changed |
 | `r.is_nmtc_native_area` | `AttributeError` |
 | `EligibilityResult(..., is_nmtc_native_area=False)` | `TypeError: unexpected keyword argument` |
 | `df["is_nmtc_native_area"]` after `.enrich()` | `KeyError` |
@@ -53,13 +62,138 @@ enumerated here instead.
 
 **Not changing** — stated so nobody upgrades defensively against it:
 `nmtc_eligible`, `eligibility_status`, `distress_level`, `tract_found`,
-`geocode_success`, all three metrics, `distress_description`, `data_source`,
-`tract_count`, `oz_tract_count`, `eligible_tract_count`, and every eligibility
-number above.
+`geocode_success`, the *values* of all three metrics, `distress_description`,
+`data_source`, `tract_count`, `oz_tract_count`, `eligible_tract_count`, and every
+eligibility number above. The metrics' RENDERING changes (see `summary()` below);
+no metric value moves.
 
 ---
 
 ### Changed
+
+- **`eligible_count()`'s percentage now has a named denominator, and the old key
+  is gone.** `pct_eligible` divided by `total`, which folds every indeterminate
+  row into the denominator. `pct_eligible_of_determined` divides by `determined`
+  (`nmtc_eligible + ineligible`), and `determined` is returned as its own key so
+  the denominator is a number the caller can see rather than one they have to
+  infer.
+
+  **This is the release's own thesis one level up.** Three lines above the ratio,
+  a comment already forbids exactly this fold — *"never `total - eligible`, which
+  would fold every indeterminate (None) row into 'ineligible' and fabricate a
+  verified-ineligible tally"* — and the ratio immediately below performed it. The
+  code stated the rule and then broke it. It is not a fabricated `False` in a
+  field; it is a fabricated *denominator* in a derived statistic, on the headline
+  line of the printed summary — the one line a user pastes into a memo.
+
+  On 1 eligible / 1 ineligible / 8 indeterminate:
+
+  ```
+  0.4.3:  {'total': 10, 'nmtc_eligible': 1, 'pct_eligible': 10.0, 'ineligible': 1, 'indeterminate': 8}
+            NMTC Eligible:      1 (10.0%)                       <- five times low
+  0.5.0:  {'total': 10, 'determined': 2, 'nmtc_eligible': 1,
+           'pct_eligible_of_determined': 50.0, 'ineligible': 1, 'indeterminate': 8}
+            ── Determined:      2 (verified eligible or verified ineligible)
+            ── Indeterminate:   8 (no match / tract absent — NOT ineligible)
+            NMTC Eligible:      1 of 2 determined (50.0%)
+  ```
+
+  **Why `determined` is the right denominator, argued rather than asserted.** The
+  case for `total` is that it is a lower bound on the true rate — the share *known*
+  to be eligible. But it is not presented as a bound: it is presented as the
+  eligibility rate, on a line reading `NMTC Eligible: 1 (10.0%)`, with no "at
+  least". Read as anything, it can only be read as *"the other 90% are not
+  eligible"* — which is a verdict for eight rows no row was read for, in ratio
+  form. And it moves with a property that has nothing to do with eligibility:
+  two identical portfolios differing only in address-formatting quality report
+  different eligibility rates, because every geocode miss depresses it. A
+  statistic whose denominator is a data-coverage artefact is not a lower bound on
+  anything a user wants. The lower-bound reading is still available and now
+  explicit — `nmtc_eligible / total` from two returned keys; the reverse direction
+  was not recoverable, which is why this is the default.
+
+  **`None`, not `0.0`, when `determined == 0`.** 0.4.3 returned `pct_eligible: 0.0`
+  for an all-indeterminate frame, which asserts "none of the determined rows are
+  eligible" about an empty set — the same fabrication in its own edge case. A rate
+  with no denominator is `None`. (0.4.3 also returned int `0` for an empty frame
+  and float `0.0` for an all-indeterminate one, from the same expression.)
+
+  **The name does not survive, deliberately.** `pct_eligible` with a changed
+  denominator would be precisely the silent redefinition `bool → Optional[bool]`
+  was on `is_opportunity_zone`: same name, different meaning, no error. This
+  release's own doctrine for that case is the `is_nmtc_native_area` drop — fail
+  loud where a silent reinterpretation is the alternative — so the key is removed
+  and `out["pct_eligible"]` raises `KeyError`. A rate whose denominator is not in
+  its name is how this defect survived four releases.
+
+  **Pre-existing, and byte-identical at `3feb601`, `ab2e8e9` and `3cac3c0`.** It
+  had **no test coverage at all**, which is why the 0.4.0 tri-state release, the
+  0.5.0 tri-state build and its hostile audit all passed over it: every test
+  asserted the *counts* and none asserted the *rate*. Eight tests now pin it,
+  including a structural one on the denominator expression.
+
+  **Denominator sweep.** Every division in the shipped package was enumerated by
+  AST walk rather than grep — **6 denominator-bearing expressions, of which 5 are
+  arithmetic** (the sixth is a `pathlib` path join). Verdicts: `loader.py` ×2
+  (`_num(v) / 100`, unit scaling behind an `is not None` guard on a pre-DataFrame
+  raw cell — safe), `census.py:311` (`start // batch_size`, a chunk label;
+  `range()` raises first on 0 — safe), `census.py:323` (`matched / total` — see
+  below), `mapper.py:245` (the defect). No other ratio in the package can absorb
+  an indeterminate.
+
+- **`summary()` no longer prints `nan%` for real tracts — the guard was written
+  for the wrong null sentinel.** It read `if self.poverty_rate is not None:`,
+  which is correct against the `None` the loader emits and a **no-op against what
+  arrives**: `pd.DataFrame(records)` coerces `None` to `NaN` in a float column,
+  and `NaN is not None` is `True`. **1,583 found tracts rendered `nan%` for
+  poverty and 2,358 for AMI** — tracts on the live path with real published
+  verdicts, not indeterminate ones:
+
+  ```
+  0.4.3   01003990000 (found, verified-ineligible):
+              Poverty Rate:     nan%
+              AMI Ratio:        nan%
+  0.5.0       Poverty Rate:     not available — the CDFI Fund published no value for this tract
+              AMI Ratio:        not available — the CDFI Fund published no value for this tract
+  ```
+
+  **Two kinds of missing, two different words**, because they are two different
+  states: `NaN` is *"not available"* — a found tract whose metric the Fund
+  published as `NA`, for which it still published a YES/NO determination — and
+  `None` is *"❓ UNKNOWN — tract not read"*, the indeterminate branches, where no
+  row exists. All three metric lines now print **unconditionally**; omitting the
+  line was a third rendering of "missing", indistinguishable from "nobody looked".
+
+  The test is `pd.isna`, not a second hand-written sentinel check: it catches
+  `None`, `np.nan`, `pd.NA` and `pd.NaT` alike. **This is the third instance of
+  this pattern in the portfolio** — hmda-analyzer 0.6.0 found `"NA" → NaN` in the
+  LAR, where a `!= "NA"` filter was a no-op that looked like a fix, and the same
+  cycle found `read_csv` yielding the module `nan` singleton. A guard written for
+  one null sentinel, against a column another library has already converted. The
+  answer is to stop naming sentinels.
+
+  This ends a **prose compensation for a package defect**: the `nmtc-eligibility`
+  skill's methodology instructs it to say "not available" for these tracts, which
+  is the documentation working around a rendering bug. The package now says it
+  itself. (The skill's own sync is a separate repo and rides its own pass after
+  0.5.0 publishes; nothing in it is edited here.)
+
+  **`is not None` sweep.** Every `is (not) None` comparison in the shipped package
+  was enumerated by AST walk — **12 guards**. Three were defective (the three
+  metric lines). Nine are correct, and **four of those are correct only because
+  `check_tract()` wraps the field in `bool(...)`** on the found path
+  (`_tri`'s guard via `is_non_metro` / `is_high_migration_rural`, and
+  `eligibility_status` / `summary()`'s two `nmtc_eligible is None` tests) — which
+  is the structural property BUILD 1's audit verified at full scale, 85,395/85,395.
+  The remaining five guard values that never touch a DataFrame (a `Path`, a
+  geocoder return, and two raw `pyxlsb` cells behind `_num`). Re-verified after
+  the change: still 85,395/85,395 strict-bool on the found path.
+
+- **The empty-batch match rate no longer prints `nan%` either.** `matched / total`
+  in `geocode_batch` is a numpy scalar divide, so on an empty frame it did not
+  raise — it returned `nan` and printed `"Geocoded 0/0 addresses (nan% match
+  rate)"`. Found by the denominator sweep above, fixed as part of the same
+  rendering family: `"(no match rate — the batch was empty)"`.
 
 - **`is_opportunity_zone` is `Optional[bool]` — `True` or `None`, never `False`.**
   The 2018 designations are 2010-tract-based; this package's table and geocoder
@@ -132,13 +266,35 @@ number above.
 
   1. **No `AND LIC` conjunction on severe/deep.** The Fund's own column headers
      read `Severe distress=LIC AND (…)`: distress is a tier *within* eligibility,
-     never a route into it. Feeding the Fund's metric columns through the shipped
-     rule, **5,197 of the live 85,395 rows were flagged severe or deep while not
-     LIC — 100% of them carried by the unemployment prong alone** (poverty 0, MFI
-     0), because poverty `>= 30%` implies `>= 20%` and MFI `<= 60%` implies
-     `<= 80%`, so only unemployment can fire outside LIC. `deep ⊆ severe` under
-     this rule, so the union *is* the severe count: 5,197 severe / 751 deep.
-     **After the fix: 0.**
+     never a route into it. Because poverty `>= 30%` implies `>= 20%` and MFI
+     `<= 60%` implies `<= 80%`, only the unemployment prong can fire outside LIC —
+     and **100% of the affected rows are carried by it alone** (poverty 0, MFI 0).
+
+     **NAME THE BASELINE — there are two, both correct, and they are different
+     quantities.** Both feed the Fund's own metric columns through the shipped rule
+     over the live 85,395 rows and differ only in where "not LIC" is read from:
+
+     | Baseline | severe or deep while not LIC | of which deep |
+     |---|---|---|
+     | the Fund's **published column C** — the *criterion* baseline, how far the rule departs from the Fund's definition | **5,197** | 751 |
+     | the shipped rule's **own `nmtc_eligible` output** — the *experienced* baseline, what a 0.4.3 caller actually saw, since both fields came off the same frame | **5,063** | 733 |
+
+     They reconcile exactly through defect (2): **134** of the 5,197 (18 of the
+     751) are rows the shipped rule itself called LIC while the Fund did not, and
+     all 134 sit inside the **932** it granted LIC on non-metro status alone.
+     5,197 − 134 = 5,063; 751 − 18 = 733.
+
+     `deep ⊆ severe` under this rule, so the union *is* the severe count in both
+     columns. Read off `distress_level` instead of the boolean columns, the
+     experienced baseline is the **same 5,063** population, partitioned 4,330
+     `"severe"` + 733 `"deep"` — the label tests deep, then severe, and only then
+     `nmtc_eligible`, so it short-circuits before the LIC test. Against the Fund's
+     column C the same split is 4,446 + 751.
+
+     Through 0.4.3 the two baselines' figures sat in one list as though they were
+     different metrics. **After the fix: 0 under both baselines**, and the
+     corrected LIC rule reproduces the Fund's published column C with 0
+     disagreements across all 85,395 rows.
   2. **`is_non_metro` stood in for the high-migration-rural 85% band.**
      §45D(e)(1)(B) sets the income test at 80% for every tract; the 85% figure
      comes only from §45D(e)(5)(A), which attaches the substitution to paragraph
@@ -163,8 +319,10 @@ number above.
   columns.** `distress_label` tests deep, then severe, and only then
   `nmtc_eligible`, so a `True` in either distress column short-circuited before
   the LIC check was consulted: **4,446 rows rendered `distress_level="severe"`
-  and 751 `"deep"` while not LIC.** AND-ing LIC into the two columns repairs the
-  label as a side effect — confirmed by execution, 0 rows remaining, not assumed.
+  and 751 `"deep"` while not Fund-LIC** (4,330 / 733 against the rule's own LIC
+  output — same population, the two baselines named in (1)). AND-ing LIC into the
+  two columns repairs the label as a side effect — confirmed by execution, 0 rows
+  remaining, not assumed.
 
   **The 12-tract synthetic sample table is unchanged by all three corrections** —
   re-derived row by row, **0 of 12** classifications move. No sample tract sits at
@@ -236,10 +394,104 @@ number above.
   with the field rather than being left behind to suggest a source.
 
   Note for maintainers: three sites shipped in 0.4.3 describe this branch as a
-  live "generic CSV path". They are wrong on reachability and are corrected in a
-  separate documentation pass; the CHANGELOG text at `[0.4.2]` below ships inside
-  the published 0.4.2/0.4.3 sdists and is therefore **corrected forward here, not
-  edited in place**.
+  live "generic CSV path". They are wrong on reachability. **Two are corrected in
+  this release** — `README.md` (the clause is struck; the replacement reads "backs
+  the built-in synthetic sample only") and `schema.py` (struck with the dead
+  branch). The third, the CHANGELOG text at `[0.4.2]` below, ships inside the
+  published 0.4.2/0.4.3 sdists and is therefore **corrected forward here, not
+  edited in place** — the same immutability rule that governs the Native Areas
+  wording in the historical `[0.4.1]` entry.
+
+- **`pct_eligible` removed from `eligible_count()`'s return.** See "the
+  denominator" under Changed. `out["pct_eligible"]` raises `KeyError`;
+  `out["pct_eligible_of_determined"]` is the replacement, and `out["determined"]`
+  is the denominator.
+
+### Documentation
+
+The README rewrite was deferred to this release on purpose: docs describe
+behaviour, so they come after behaviour settles, and the two fixes above changed
+what the docs had to say.
+
+- **The docs-check ledger is empty again — 12 → 0**, and this time the emptiness
+  means something. All twelve entries were `readme-missing-symbol`: three core
+  public names and the whole nine-class exception leaf set. The gate fails the day
+  an entry starts passing without being removed, so closing them could not be done
+  quietly. `docs-check.toml`'s rationale block is rewritten to say what was closed
+  and how, rather than left describing a ledger that no longer exists.
+
+- **Three false claims were shipping inside the 0.5.0 wheel**, in README "Known
+  Issues" → `METADATA` (the README is the long description, so these rendered on
+  the PyPI project page). None of them is a claim `docs-check` can see: it checks
+  `__all__` symbols and executed blocks, not prose.
+
+  | Claim | Reality |
+  |---|---|
+  | `is_nmtc_native_area` *"is `False` for all 85,395 tracts"* | The field is **deleted**; reading it raises |
+  | *"`summary()` reports `Opportunity Zone: No`"* | It prints `❓ NOT CONFIRMED` |
+  | *"a tri-state fix is slated for 0.5.0"* | **This is 0.5.0** |
+
+- **`opportunity_zone_status` is documented deliberately, with all three states
+  and what each one asserts.** It is structurally invisible to the gate — a
+  property on an exported class, not an `__all__` name — so no check in this repo
+  could ever notice it was undocumented. Notably, `"not-confirmed"` is documented
+  as asserting **nothing**.
+
+- **The exception hierarchy ships as a tree**, copied from `exceptions.py`'s module
+  docstring, with a "raised when" beside each of the twelve classes and a worked
+  multi-`except` example. A glob (`*DownloadError`) cannot be typed into an
+  `except` clause, which is why four leaves counted as undocumented while the
+  README appeared to gesture at them. **The tree's SHAPE is now asserted by
+  `tests/test_constraints.py`** — direct `__bases__`, not `issubclass`, which
+  cannot tell a three-level tree from a flat one — closing a blind spot
+  `docs-check.toml` had documented as permanent.
+
+- **The Output Columns table is corrected.** It listed nine rows, one of which was
+  `eligibility_status`, and omitted `is_high_migration_rural` entirely; it typed
+  three tri-state columns as plain `bool`; and it implied OZ status is available
+  from the batch path. It now reads **nine eligibility columns plus
+  `eligibility_status`** — ten — with `Optional[bool]` on the four tri-state
+  columns, the `!= True` filter, and `is_opportunity_zone`'s absence stated.
+
+- **The batch-capability sentence is fixed; the behaviour is 0.6.0's.** The README
+  sold *"pass 10,000 addresses and get results in seconds"* while a single
+  transport failure or ambiguous address aborts the whole batch (`asyncio.gather`
+  without `return_exceptions`). The abort is a deliberate 0.4.0 correctness
+  decision — the silent per-row `None` it replaced became a fabricated
+  "ineligible" downstream — so 0.5.0 states the semantics next to the claim rather
+  than reverting them. Per-row failure capture needs a designed contract and is
+  **0.6.0's**. The stale *"planned for 0.4.1"* promise in `census.py`, which 0.4.1
+  and 0.4.2 both shipped without, is corrected to 0.6.0 with the reason.
+
+### Recorded, not fixed — all 0.6.0 unless noted
+
+Found and driven this release; each is deliberately out of scope.
+
+- **The 12-tract sample fixture cannot reach any of the three rules this release
+  corrected** — driven row by row, not assumed. No tract sits at exactly 30.0% or
+  40.0% poverty; all **7** flagged severe or deep clear **both** LIC prongs with
+  margin (poverty 0.28–0.45, MFI 0.45–0.72); and the (80%, 85%] MFI band is empty —
+  the only two non-metro tracts carry MFI 0.95 and 0.88, both above 0.85, so the
+  `hmr & ~metro` conjunct cannot bite either. **0 of 12 classifications move under
+  all three corrections.** A fixture invariant under a correction is evidence about
+  the fixture, not about the fix — the real coverage is in the synthetic unit tests
+  in `tests/test_fabricated_negatives.py`, which drive the boundaries directly.
+- **`check_tract()` applies no GEOID normalization** while both tables are
+  `zfill(11)`-ed, so a leading-zero-stripped GEOID — the standard form out of Excel
+  and CSV — silently returns not-found. It fails safe, but it is the most likely
+  real-world input error.
+- **`opportunity_zone_status` returns `not-confirmed` for input that was never a
+  GEOID**, where `eligibility_status` correctly says `not-found`. The property
+  tests only `tract_id is None`.
+- **`examples/nmtc_eligibility_demo.ipynb:560` has stale cached output** listing the
+  deleted column. It ships in neither artifact; regenerate when the skill's worked
+  examples are re-executed.
+- **`docs-check.toml` still claims "114 tests" — in ONE comment now, not two.**
+  Two releases stale. `docs-check.toml:33` survives as a worked example of the
+  claim pattern (*"Matches a line like `114 tests across all modules …`"*). The
+  second occurrence, the assertion-3 note, sat inside the ledger rationale block
+  this release rewrote, so it went with the twelve entries rather than being fixed
+  on its own. The live claim and the gate both read **192**.
 
 ## [0.4.3] — 2026-08-09
 

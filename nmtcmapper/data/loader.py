@@ -473,11 +473,33 @@ def _compute_eligibility(df: pd.DataFrame) -> pd.DataFrame:
        is a tier WITHIN eligibility, never a route into it. Poverty >= 30% implies
        poverty >= 20% and MFI <= 60% implies MFI <= 80%, so those two prongs
        cannot fire outside LIC — but unemployment carries no LIC implication.
-       Measured on the live 85,395 rows, the shipped rule flagged 5,197 tracts
-       severe or deep while NOT LIC, every one carried by the unemployment prong
-       alone. deep is a subset of severe under this rule (every deep prong is
-       strictly tighter than its severe counterpart, and NaN fails both), so the
-       union IS the severe count: 5,197 severe / 751 deep.
+
+       MEASURED ON THE LIVE 85,395 ROWS, AGAINST TWO NAMED BASELINES. Both are
+       correct measurements and they are NOT the same quantity, so neither number
+       may be quoted without saying which "NOT LIC" it is scored against:
+
+         * NOT LIC per the Fund's PUBLISHED column C — the criterion baseline:
+           5,197 severe / 751 deep.
+         * NOT LIC per THIS RULE'S OWN `nmtc_eligible` output — the experienced
+           baseline, what a 0.4.3 caller actually saw, because they read both
+           fields off the same frame: 5,063 severe / 733 deep. Read off
+           `distress_level` instead of the boolean columns it is the same 5,063:
+           deep is a subset of severe here, and `distress_label` tests deep, then
+           severe, and only then `nmtc_eligible`, so the label short-circuits
+           before the LIC test and partitions that one population into 4,330
+           "severe" + 733 "deep".
+
+       The two baselines reconcile exactly through defect (2): 134 of the 5,197
+       (18 of the 751) are rows this rule itself called LIC while the Fund did
+       not, all 134 inside the 932 it granted LIC on non-metro status alone.
+       5,197 - 134 = 5,063 and 751 - 18 = 733.
+
+       Under either baseline every one of them is carried by the unemployment
+       prong alone — poverty 0, MFI 0. deep is a subset of severe under this rule
+       (every deep prong is strictly tighter than its severe counterpart, and NaN
+       fails both), so the union IS the severe count in both columns.
+
+       After the fix: 0 under BOTH baselines.
 
     2. `is_non_metro` STOOD IN FOR THE HIGH-MIGRATION-RURAL 85% BAND.
        §45D(e)(1)(B) sets the income test at 80% for EVERY tract; the 85% figure

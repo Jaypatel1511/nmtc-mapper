@@ -19,8 +19,19 @@ it as `False` fabricates a verified-ineligible answer. The additive
 ## Why nmtc-mapper?
 
 The CDFI Fund provides a manual web tool (CIMS) for checking NMTC eligibility
-one address at a time. nmtc-mapper automates this — pass 10,000 addresses and
-get results in seconds, using the same official data source.
+one address at a time. nmtc-mapper automates this — pass a whole DataFrame of
+addresses and get results in seconds, using the same official data source.
+
+> **A batch is all-or-nothing, on purpose.** `enrich()` geocodes concurrently via
+> `asyncio.gather` **without** `return_exceptions`, so the *first* transport
+> failure or ambiguous address raises and **aborts the entire batch**. At 10,000
+> addresses that is close to certain, so plan for a retry rather than for a
+> partial frame. This is deliberate: the alternative — a silent per-row `None` —
+> became a fabricated "ineligible" downstream, and losing time is strictly better
+> than losing truth. A genuine no-match is *not* a failure and does not abort; it
+> yields `eligibility_status = "geocode-failed"` for that row alone. Per-row
+> failure capture needs a designed contract (which column carries the error, how
+> `eligibility_status` reports transport failure vs no-match) and is **0.6.0's**.
 
 ---
 
@@ -34,18 +45,19 @@ get results in seconds, using the same official data source.
 ## Quickstart
 
     # docs-check: skip NMTCMapper() downloads the multi-MB CDFI Fund file and check_address hits the live Census geocoder
-    from nmtcmapper import NMTCMapper
+    from nmtcmapper import NMTCMapper, EligibilityResult
 
     mapper = NMTCMapper()
 
-    # Single address (geocodes automatically)
-    result = mapper.check_address("1234 S Michigan Ave, Chicago, IL 60605")
+    # Single address (geocodes automatically) -> EligibilityResult
+    result: EligibilityResult = mapper.check_address("1234 S Michigan Ave, Chicago, IL 60605")
     result.summary()
-    print(result.nmtc_eligible)      # True / False / None (None = indeterminate)
-    print(result.eligibility_status) # "verified-eligible" | "verified-ineligible"
-                                     #  | "not-found" | "geocode-failed"
-    print(result.distress_level)     # "deep" / "severe" / "lic" / "ineligible" / "unknown"
-    print(result.poverty_rate)       # 0.38  (None if the tract is indeterminate)
+    print(result.nmtc_eligible)          # True / False / None (None = indeterminate)
+    print(result.eligibility_status)     # "verified-eligible" | "verified-ineligible"
+                                         #  | "not-found" | "geocode-failed"
+    print(result.opportunity_zone_status)# "designated" | "not-confirmed" | "no-tract"
+    print(result.distress_level)         # "deep" / "severe" / "lic" / "ineligible" / "unknown"
+    print(result.poverty_rate)           # 0.38 — but see "Two kinds of missing" below
 
     # Known census tract (no geocoding needed)
     result = mapper.check_tract("17031840100")
@@ -63,6 +75,56 @@ get results in seconds, using the same official data source.
 
     # Summary stats
     mapper.eligible_count(df)
+
+`EligibilityResult` is the return type of both `check_address()` and
+`check_tract()` — a frozen-in-shape dataclass, exported from the top level so you
+can type-annotate against it. It carries the fourteen fields listed under
+[Output Columns](#output-columns) plus three read-only properties:
+`eligibility_status`, `opportunity_zone_status` and `distress_description`.
+
+Two loaders and the geocoder are exported directly, for callers who want the data
+without the mapper:
+
+    # docs-check: skip load_eligibility_table downloads the multi-MB CDFI Fund file; geocode_address hits the live Census API
+    from nmtcmapper import load_eligibility_table, load_sample_table, geocode_address
+
+    table = load_eligibility_table()      # the real 85,395-tract frame, indexed by GEOID
+    demo  = load_sample_table()           # the 12-tract synthetic sample, offline
+    tract = geocode_address("1234 S Michigan Ave, Chicago, IL 60605")   # -> "17031..." or None
+
+`geocode_address` returns `None` for **exactly one** thing — a genuine no-match
+(HTTP 200, zero address matches). Every other failure raises; see
+[Exception hierarchy](#exception-hierarchy).
+
+---
+
+### What the eligibility percentage is a percentage *of*
+
+`eligible_count(df)` returns counts plus **one** rate, and that rate's
+denominator is named in its key:
+
+| Key | Meaning |
+|---|---|
+| `total` | rows in the frame |
+| `determined` | `nmtc_eligible` + `ineligible` — rows with a real verdict |
+| `indeterminate` | `None` verdicts: no geocode match, or tract absent from the universe |
+| `nmtc_eligible` | verified eligible |
+| `ineligible` | verified ineligible — the Fund's file explicitly says NO |
+| `pct_eligible_of_determined` | `Optional[float]`: `nmtc_eligible / determined`, **`None` when `determined == 0`** |
+| `deep_distress` / `severe_distress` / `lic_only` | distress-tier counts |
+
+**`pct_eligible` was removed in 0.5.0 and reading it now raises `KeyError`.** It
+divided by `total`, which folds every indeterminate row into the denominator: on
+1 eligible / 1 ineligible / 8 indeterminate it reported **10.0%** where the
+eligible share of what was actually determined is **50.0%**. A rate over `total`
+can only be read as "the other 90% are not eligible", which is a verdict for
+eight rows no row was read for — and it moves with your address-formatting
+quality rather than with eligibility. If you want the old lower-bound reading,
+compute `nmtc_eligible / total` yourself from two returned keys; that direction
+is explicit, the reverse was not recoverable.
+
+`None` rather than `0.0` when nothing was determined, for the same reason: `0.0`
+asserts "none of the determined rows are eligible" about an empty set.
 
 ---
 
@@ -85,9 +147,61 @@ substituting demo data. (Before 0.3.4 any failure silently fell back to a
         print(f"Could not load real NMTC data: {e}")
         raise
 
-The exception hierarchy (`NMTCMapperError` → `EligibilityDataError` /
-`OZDataError` → specific `*DownloadError` / `*ParseError` leaves) is exported
-from the top level, so you can catch broadly or precisely.
+### Exception hierarchy
+
+Every class below is exported from the top level, so you can catch broadly or
+precisely. All twelve names are spelled out — a glob like `*DownloadError` is a
+gesture, and you cannot type a glob into an `except` clause.
+
+    # docs-check: skip ASCII diagram of the exception hierarchy, not executable Python
+    NMTCMapperError                    every error this package raises
+    ├─ EligibilityDataError            the CDFI Fund eligibility dataset could not be obtained
+    │  ├─ EligibilityDownloadError     403 / 404 / DNS / timeout / connection, no usable cache
+    │  ├─ EligibilityParseError        obtained but unreadable: corrupt bytes, HTML error page, missing sheet, bad zip
+    │  ├─ EligibilitySchemaError       read, but the layout moved: wrong column count, a renamed header at a bound index, or a degenerate parse — also raised by the cell-value allowlists
+    │  └─ EligibilityValueError        a parsed number is outside its plausible bound (e.g. the AMI ratio flipping from ~0.91 to percent scale ~91)
+    ├─ OZDataError                     the Opportunity Zone designation dataset could not be obtained
+    │  ├─ OZDownloadError              403 / 404 / DNS / timeout / connection
+    │  └─ OZParseError                 obtained but unreadable, or no recognizable tract column
+    └─ GeocoderError                   address -> census tract resolution failed
+       ├─ GeocoderTransportError       unreachable or unreadable after retries: HTTP status, timeout, connection/DNS, undecodable body
+       └─ AmbiguousAddressError        multiple matches resolving to DIFFERENT tracts, so there is no single right answer
+
+Catch at whatever level you mean:
+
+    # docs-check: skip constructing NMTCMapper() downloads the CDFI Fund file
+    from nmtcmapper import (
+        NMTCMapper, NMTCMapperError,
+        EligibilityDataError, EligibilityDownloadError, EligibilityParseError,
+        EligibilitySchemaError, EligibilityValueError,
+        OZDataError, OZDownloadError, OZParseError,
+        GeocoderError, GeocoderTransportError, AmbiguousAddressError,
+    )
+
+    try:
+        mapper = NMTCMapper()
+        result = mapper.check_address("1234 S Michigan Ave, Chicago, IL 60605")
+    except EligibilitySchemaError as e:
+        raise SystemExit(f"CDFI Fund file layout changed; upgrade nmtc-mapper: {e}")
+    except EligibilityDataError as e:
+        raise SystemExit(f"No eligibility data: {e}")
+    except AmbiguousAddressError as e:
+        print(f"Needs a more specific address: {e}")
+    except GeocoderTransportError as e:
+        print(f"Census geocoder unreachable — retry later: {e}")
+    except NMTCMapperError as e:
+        raise SystemExit(f"nmtc-mapper failed: {e}")
+
+`EligibilitySchemaError` refuses to parse on rather than read eligibility out of
+an unverified column, and it offers **no bypass** — the verdicts it would let
+through are not trustworthy. `AmbiguousAddressError` is raised only when the
+candidate matches disagree; if every match resolves to the *same* tract the
+ambiguity is harmless and the answer is returned. `GeocoderTransportError` is the
+one a batch caller is most likely to meet, and it aborts the batch (above).
+
+The shape of this tree is asserted by `tests/test_constraints.py`, not just
+drawn here — the docs gate checks that each name appears in this file and
+cannot check the inheritance relationships.
 
 **Explicit demo / offline data** — for examples, tests, or an air-gapped demo,
 opt in to the synthetic sample dataset. This performs **no network calls** and
@@ -158,9 +272,10 @@ Distress levels:
 > 40.0%. Of those qualifying on the poverty prong alone, the Fund published
 > `severe = NO` for **all 21** at 30.0% and `deep = NO` for **all 13** at 40.0%.
 >
-> A threshold-based fallback (`_compute_eligibility`) exists only for the
-> generic CSV path and the built-in synthetic sample; it is **not** used for the
-> official file.
+> A threshold-based rule (`_compute_eligibility`) backs the **built-in synthetic
+> sample only**; it is **not** used for the official file. (Through 0.4.3 this
+> sentence also named a "generic CSV path". There was no such path — the branch
+> that also called this rule was unreachable dead code, and 0.5.0 deleted it.)
 
 ---
 
@@ -196,47 +311,121 @@ CDFI Fund's CIMS tool instead.
 
 ## Output Columns
 
-After running .enrich(), your DataFrame will have:
+`.enrich()` adds **nine eligibility columns plus `eligibility_status`** — ten in
+all — and removes nothing you passed in:
 
-- nmtc_eligible (Optional[bool]: True / False / None — None = indeterminate)
-- eligibility_status (str: verified-eligible / verified-ineligible / not-found / geocode-failed)
-- distress_level (str: deep / severe / lic / ineligible / unknown)
-- poverty_rate (Optional[float])
-- ami_ratio (Optional[float])
-- unemployment_rate (Optional[float])
-- is_non_metro (bool)
-- severe_distress (bool)
-- deep_distress (bool)
+| Column | Type | Notes |
+|---|---|---|
+| `nmtc_eligible` | `Optional[bool]` | `True` / `False` / `None`. `None` = **indeterminate**, never a falsy "ineligible" |
+| `distress_level` | `str` | `deep` / `severe` / `lic` / `ineligible` / `unknown` |
+| `poverty_rate` | `Optional[float]` | may be `NaN` on a found tract — see below |
+| `ami_ratio` | `Optional[float]` | may be `NaN` on a found tract — see below |
+| `unemployment_rate` | `Optional[float]` | may be `NaN` on a found tract — see below |
+| `is_non_metro` | `Optional[bool]` | `None` only when no row was read |
+| `is_high_migration_rural` | `Optional[bool]` | `None` only when no row was read |
+| `severe_distress` | `Optional[bool]` | `None` only when no row was read |
+| `deep_distress` | `Optional[bool]` | `None` only when no row was read |
+| `eligibility_status` | `str` | `verified-eligible` / `verified-ineligible` / `not-found` / `geocode-failed` |
+
+The four `Optional[bool]` columns are `None` **exactly** when `eligibility_status`
+is `not-found` or `geocode-failed`. For a found tract their `False` is the CDFI
+Fund's published `NO` and is fully supportable. The frame is object-dtype, so
+filter with `df[col] != True` — **`~df[col]` raises `TypeError`** once any
+indeterminate row is present.
+
+**`is_opportunity_zone` is not among them, and never has been.** Batch callers get
+no OZ answer; single-address and single-tract callers do, via
+`result.is_opportunity_zone` / `result.opportunity_zone_status`. 0.5.0
+deliberately does not close that gap — adding a column is a data-surface change,
+not an honesty fix.
+
+**`is_nmtc_native_area` was removed in 0.5.0.** `df["is_nmtc_native_area"]` now
+raises `KeyError`; see [Known limitations](#known-limitations).
+
+### Two kinds of missing, in the three metric columns
+
+`poverty_rate`, `ami_ratio` and `unemployment_rate` can be absent for **two
+different reasons**, and the distinction is part of the contract:
+
+- **`None`** — no row was read at all (`eligibility_status` is `not-found` or
+  `geocode-failed`).
+- **`NaN`** — a **found** tract whose metric the Fund published as `NA`: **1,583
+  rows for poverty and 2,358 for AMI** on the live file. Those tracts still carry
+  a real published YES/NO verdict; only the number is missing.
+
+So `r.poverty_rate is None` is **not** a missing-value test on this field. Use
+`pd.isna(r.poverty_rate)` for "no number either way", and `eligibility_status` to
+tell which kind. `summary()` prints two different phrases for the two states —
+*not available* for the Fund's `NA`, *tract not read* for an indeterminate result.
+Through 0.4.3 both a wrongly-guarded `NaN` and the resulting `nan%` reached the
+printed block.
 
 ---
 
-## Known Issues
+## Opportunity Zone status
 
-**`is_opportunity_zone` is unreliable — a `False` may be a vintage miss.** The
-Opportunity Zone list is the CDFI Fund's Dec 2018 designated-QOZ file, and OZs
-were designated on **2010 census tracts** (legally fixed to them). The geocoder
-returns **2020** tracts, and **1,408 of the 8,764 OZ designations (~16%)** have
-no matching 2020 GEOID (they split/merged/renumbered after 2010). So an address
-in one of those designations reports `Opportunity Zone: No` even though it is in
-a designated OZ. A **`Yes` is trustworthy**; a **`No` is not** — it may mean
-"not an OZ" *or* "OZ with no 2020 GEOID", and the package cannot yet tell them
-apart. This is **pre-existing** (not introduced or worsened by 0.4.1's geocoder
-change). A tri-state fix (`Optional[bool]`) is slated for 0.5.0 — see the
-CHANGELOG.
+`is_opportunity_zone` is `Optional[bool]` and is **`True` or `None` — never
+`False`** (0.5.0). Read `opportunity_zone_status` instead of the field's
+truthiness; `summary()` does.
 
-**`is_nmtc_native_area` is always `False` — it means "not determined," not "not
-a native area."** No column in the live CDFI Fund `.xlsb` file feeds this field,
-so it is `False` for all 85,395 tracts. A `False` from this field carries no
-information at all: it never means the tract was checked and found not to be a
-native area. Native areas (Federal Indian Reservations, Off-Reservation Trust
-Lands, Hawaiian Home Lands, Alaska Native Village Statistical Areas) are a real
-NMTC *Areas of **Deep** Distress* criterion — item 2 of the enumeration in
+| `opportunity_zone_status` | `is_opportunity_zone` | What it asserts | Live count |
+|---|---|---|---|
+| `"designated"` | `True` | This GEOID is on the CDFI Fund's Dec-2018 designated-QOZ list. A claim about **the list**, which is 2010-tract-based — not about the parcel | 7,356 of 85,395 |
+| `"not-confirmed"` | `None` | **Nothing.** The GEOID is not on that list, and this package cannot tell "not designated" from "designated on a 2010 GEOID with no 2020 successor" from "an Island Area outside this table" | 78,039 of 85,395 |
+| `"no-tract"` | `None` | No census tract was resolved at all, so there was nothing to test membership against | when `tract_id is None` |
+
+Three values, not four. The reasons behind `not-confirmed` are exactly what the
+package **cannot** distinguish, so enumerating them as separate statuses would
+re-introduce the fabrication in string form.
+
+**Why `False` is not returnable.** The 2018 designations are legally fixed to
+**2010** census tracts; this package's table and geocoder are **2020**-basis, and
+**1,408 of the 8,764 designations (16.07%)** have no row in the 2020-basis table.
+A non-match and a genuine non-designation are therefore *the same observation*
+without a crosswalk, and no crosswalk ships: the 1,408 have 3,447 distinct 2020
+successors, 1,299 of which also contain territory from 2010 tracts that were never
+designated. Marking those `True` would assert a designation that was never made.
+
+**Membership is keyed on the designation set, not on `tract_found`.** Pass one of
+the retired 2010 GEOIDs directly and you get a correct `True` alongside
+`tract_found = False` — the one place the OZ answer is more complete than the
+eligibility answer.
+
+**Upgrading from 0.4.3:** `if not r.is_opportunity_zone:` used to mean "not an OZ"
+and now means "not confirmed" for **78,039 tracts**; `r.is_opportunity_zone is
+False` now matches nothing, ever; `sum(...)` and `int(...)` over the field raise
+`TypeError`. The CHANGELOG's UPGRADING table lists every call shape.
+
+---
+
+## Known limitations
+
+**`is_nmtc_native_area` was removed in 0.5.0 — it is not tri-state, it is gone.**
+Reading it raises `AttributeError` on a result, `KeyError` on an enriched frame,
+and passing it to `EligibilityResult(...)` raises `TypeError`. **Tri-state where a
+positive is obtainable; drop where it never is.** No value was ever obtainable:
+the CDFI Fund publishes no tract-keyed NMTC native-area resource, and the four
+AIANNH classes (Federal Indian Reservations, Off-Reservation Trust Lands,
+Hawaiian Home Lands, Alaska Native Village Statistical Areas) carry four-digit
+Census codes with **no state or county component**, so they cannot nest into
+`SSCCCTTTTTT` at all — the Navajo Nation spans three states. Establishing the
+status is a polygon intersection, not a table join. The criterion itself is live:
 **Q32** of the CDFI Fund's *NMTC Compliance Monitoring and Evaluation Frequently
-Asked Questions* (updated April 2025). They are **not** among the eleven Areas
-of Higher Distress resources Q31 lists. The Fund publishes no tract-keyed lookup
-for the criterion, and it is absent from the LIC eligibility file this package
-loads. **Pre-existing since 0.1.0**; 0.4.1 does not change it. Resolution
-deferred to 0.5.0 — see the CHANGELOG.
+Asked Questions* (updated April 2025) names *NMTC Native Areas* as one of four
+**Areas of Deep Distress** criteria; it is **not** among the eleven Areas of
+Higher Distress resources Q31 lists. The field is gone because the package cannot
+compute it, not because the criterion is unimportant. Use CIMS.
+
+**A leading-zero-stripped GEOID silently returns not-found.** `check_tract()`
+applies no normalization while both internal tables are `zfill(11)`-ed, so
+`"1013953500"` — the standard form out of Excel and CSV — misses. It fails safe
+(`nmtc_eligible = None`, never a fabricated `False`), but it is the most likely
+real-world input error. Pass `str(geoid).zfill(11)` until **0.6.0** normalizes it.
+
+**`opportunity_zone_status` says `not-confirmed` for input that was never a
+GEOID.** `eligibility_status` correctly reports `not-found`, but the OZ property
+tests only whether `tract_id is None`, so junk input takes the `not-confirmed`
+branch. **0.6.0.**
 
 ---
 
@@ -252,8 +441,8 @@ not just in the repository, so they travel with the installed package.
     print(get_methodology_path().name)
 
 `fabricated_negatives.md` (the default) records what a `False` asserts in every
-boolean this package exposes, why `is_opportunity_zone` becomes `Optional[bool]`
-while `is_nmtc_native_area` is dropped outright, and the regression invariants
+boolean this package exposes, why `is_opportunity_zone` became `Optional[bool]`
+while `is_nmtc_native_area` was dropped outright, and the regression invariants
 those changes must not move.
 
 ---
@@ -263,11 +452,12 @@ those changes must not move.
     # docs-check: skip shell command; the suite is run by CI, not by this gate
     PYTHONPATH=. pytest tests/ -v
 
-171 tests across all modules (including fail-loud, explicit-sample-mode,
-tri-state eligibility, fabricated-negative, cell-value-allowlist, async-batch,
-cache-poisoning and schema-drift coverage).
-12 of these are `@live` tests that hit the real CDFI Fund / Census endpoints; CI
-deselects them with `-m "not live"`, leaving 159 offline.
+192 tests across all modules (including fail-loud, explicit-sample-mode,
+tri-state eligibility, fabricated-negative, null-sentinel-rendering,
+percentage-denominator, exception-hierarchy-shape, cell-value-allowlist,
+async-batch, cache-poisoning and schema-drift coverage).
+14 of these are `@live` tests that hit the real CDFI Fund / Census endpoints; CI
+deselects them with `-m "not live"`, leaving 178 offline.
 
 ---
 

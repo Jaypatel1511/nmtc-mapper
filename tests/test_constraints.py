@@ -113,3 +113,97 @@ def test_c2_every_unknown_distress_result_has_none_eligible(sample_table, mapper
             assert r["nmtc_eligible"] is None, r
     # and at least all three really were indeterminate (guards a vacuous pass)
     assert all(r["distress_level"] == "unknown" for r in results)
+
+
+# ── C1b (0.5.0): the SHAPE of the tree, not just its root ────────────────────
+#
+# docs-check.toml's own limitations section says the gate cannot verify this:
+# "assertion 6 checks that each exception NAME appears in the README. It does not
+# check the inheritance relationships the README draws ... a rewiring of the
+# hierarchy stays green." 0.5.0 puts the whole tree in the README, so the shape
+# needs a test rather than a documented blind spot. This is the closure the
+# methodology (§M8.2) asked the build to add.
+
+# The exact parent of every class, mirroring the ASCII tree in exceptions.py's
+# module docstring and in README "Exception hierarchy". Adding a leaf without
+# adding it here fails test_c1b_every_exception_class_is_in_this_map.
+EXPECTED_PARENTS = {
+    "NMTCMapperError":          Exception,
+    "EligibilityDataError":     "NMTCMapperError",
+    "EligibilityDownloadError": "EligibilityDataError",
+    "EligibilityParseError":    "EligibilityDataError",
+    "EligibilitySchemaError":   "EligibilityDataError",
+    "EligibilityValueError":    "EligibilityDataError",
+    "OZDataError":              "NMTCMapperError",
+    "OZDownloadError":          "OZDataError",
+    "OZParseError":             "OZDataError",
+    "GeocoderError":            "NMTCMapperError",
+    "GeocoderTransportError":   "GeocoderError",
+    "AmbiguousAddressError":    "GeocoderError",
+}
+
+
+def test_c1b_every_exception_class_is_in_this_map():
+    """A leaf added to exceptions.py without a row here is an undocumented
+    rewiring — the empty-sweep failure mode, closed in both directions."""
+    found = {c.__name__ for c in _all_exception_classes()}
+    assert found == set(EXPECTED_PARENTS), (
+        f"exceptions.py and EXPECTED_PARENTS disagree: "
+        f"only in module {sorted(found - set(EXPECTED_PARENTS))}, "
+        f"only in map {sorted(set(EXPECTED_PARENTS) - found)}"
+    )
+
+
+def test_c1b_direct_parent_of_every_exception_class():
+    """DIRECT parent, via __bases__ — not `issubclass`. `issubclass` passes for
+    any ancestor, so it cannot tell the README's three-level tree from a flat
+    one where every leaf hangs off NMTCMapperError."""
+    for name, expected in EXPECTED_PARENTS.items():
+        cls = getattr(exc_mod, name)
+        bases = cls.__bases__
+        assert len(bases) == 1, f"{name} has multiple bases: {bases}"
+        want = expected if isinstance(expected, type) else getattr(exc_mod, expected)
+        assert bases[0] is want, (
+            f"{name}'s direct parent is {bases[0].__name__}, "
+            f"README and exceptions.py draw {want.__name__}"
+        )
+
+
+def test_c1b_the_readme_and_the_docstring_draw_the_same_tree():
+    """The README's tree was copied from exceptions.py's module docstring so one
+    diagram documents all twelve. Copies drift; this pins them together on the
+    parent-child edges rather than on whitespace."""
+    from pathlib import Path
+    readme = Path(__file__).resolve().parent.parent / "README.md"
+    # NOT a skip. Every context that runs this suite ships README.md beside
+    # tests/: the checkout, the sdist (MANIFEST.in `include README.md` plus
+    # `recursive-include tests *.py` — both verified present in the 0.5.0
+    # tarball), and the docs-check harness, which copies both. A skip here would
+    # be a test that certifies nothing while reporting green, which is the same
+    # vacuity class `empty_parameter_set_mark = "fail_at_collect"` closes in
+    # pyproject.toml.
+    assert readme.exists(), (
+        f"README.md not found at {readme} — the suite must run beside the README "
+        f"it asserts against; a missing README is a packaging defect, not a "
+        f"reason to pass."
+    )
+    text = readme.read_text(encoding="utf-8")
+    for name in EXPECTED_PARENTS:
+        assert name in text, f"{name} missing from README"
+    # Locate the drawn tree: the line where each class is the FIRST identifier on
+    # the line, after stripping indentation and box-drawing glyphs. That is what
+    # a tree row looks like and what a prose mention does not.
+    row_of = {}
+    for i, raw in enumerate(text.splitlines()):
+        head = raw.strip().lstrip("├└─│ ").split(" ")[0].split("\t")[0]
+        if head in EXPECTED_PARENTS and head not in row_of:
+            row_of[head] = i
+    for name in EXPECTED_PARENTS:
+        assert name in row_of, f"{name} is not drawn as a row in the README tree"
+    # every leaf must be drawn UNDER its parent: the parent's row comes first
+    for name, expected in EXPECTED_PARENTS.items():
+        if isinstance(expected, type):
+            continue
+        assert row_of[expected] < row_of[name], (
+            f"README draws {name} before its parent {expected}"
+        )

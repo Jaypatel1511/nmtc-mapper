@@ -347,3 +347,280 @@ def test_live_invariants_did_not_move():
     assert bool(row["nmtc_eligible"]) is True
     assert bool(row["is_high_migration_rural"]) is True
     assert row["distress_level"] == "lic"
+
+
+# ── G1: the fabricated DENOMINATOR in eligible_count() ───────────────────────
+#
+# Not a fabricated False in a field — a fabricated denominator in a derived
+# statistic, on the headline line of the printed summary. Through 0.4.3
+# `pct_eligible` was `eligible / total`, which folds every indeterminate row into
+# the denominator: the identical fold the comment three lines above it forbids for
+# the COUNT. It had no test at all, which is why it survived the 0.4.0 tri-state
+# release and the 0.5.0 BUILD-1 audit.
+
+def _counts(mapper, eligible, ineligible, indeterminate):
+    """A frame with an exact tri-state mix, straight into eligible_count()."""
+    col = [True] * eligible + [False] * ineligible + [None] * indeterminate
+    lvl = (["lic"] * eligible + ["ineligible"] * ineligible
+           + ["unknown"] * indeterminate)
+    return mapper.eligible_count(
+        pd.DataFrame({"nmtc_eligible": col, "distress_level": lvl})
+    )
+
+
+def test_pct_is_over_determined_not_over_total(mapper):
+    """1 eligible / 1 ineligible / 8 indeterminate. `eligible/total` reported
+    10.0% — five times low — where the eligible share of what was actually
+    determined is 50.0%."""
+    out = _counts(mapper, eligible=1, ineligible=1, indeterminate=8)
+    assert out["total"] == 10
+    assert out["determined"] == 2
+    assert out["indeterminate"] == 8
+    assert out["nmtc_eligible"] == 1
+    assert out["pct_eligible_of_determined"] == 50.0
+    # the old value, and the shape of the fold, must not be recoverable from here
+    assert out["pct_eligible_of_determined"] != 10.0
+
+
+def test_the_old_field_name_is_gone_and_fails_loud(mapper):
+    """`pct_eligible` with a changed denominator would be the same silent
+    redefinition `is_opportunity_zone` was. Dropping the name makes a caller
+    reading the old key raise instead of quietly getting a different number."""
+    out = _counts(mapper, eligible=1, ineligible=1, indeterminate=8)
+    assert "pct_eligible" not in out
+    with pytest.raises(KeyError):
+        out["pct_eligible"]
+
+
+def test_no_determined_rows_gives_None_not_zero_percent(mapper):
+    """0.4.3 returned `pct_eligible: 0.0` for an all-indeterminate frame — "0% of
+    them are eligible" asserted about an empty set. A rate with no denominator is
+    None."""
+    out = _counts(mapper, eligible=0, ineligible=0, indeterminate=5)
+    assert out["determined"] == 0
+    assert out["pct_eligible_of_determined"] is None
+    assert out["pct_eligible_of_determined"] is not False   # None, not falsy-0
+
+
+def test_empty_frame_gives_None_too(mapper):
+    out = _counts(mapper, eligible=0, ineligible=0, indeterminate=0)
+    assert out["total"] == 0
+    assert out["pct_eligible_of_determined"] is None
+
+
+def test_the_three_states_always_partition_total(mapper):
+    for e, i, u in ((3, 2, 5), (0, 7, 0), (4, 0, 0), (1, 1, 8)):
+        out = _counts(mapper, e, i, u)
+        assert out["nmtc_eligible"] + out["ineligible"] == out["determined"]
+        assert out["determined"] + out["indeterminate"] == out["total"]
+
+
+def test_the_printed_headline_names_its_denominator_inline(mapper, capsys):
+    """House standard: the qualifier is inline, never a footer — this is the one
+    line a user pastes into a memo, and a bare "(50.0%)" is the fabrication in a
+    different font."""
+    _counts(mapper, eligible=1, ineligible=1, indeterminate=8)
+    out = capsys.readouterr().out
+    elig_line = [ln for ln in out.splitlines() if "NMTC Eligible" in ln][0]
+    assert "1 of 2 determined" in elig_line
+    assert "50.0%" in elig_line
+    assert "Determined:" in out
+    assert "Indeterminate:" in out
+
+
+def test_the_zero_denominator_line_states_why_there_is_no_rate(mapper, capsys):
+    _counts(mapper, eligible=0, ineligible=0, indeterminate=5)
+    out = capsys.readouterr().out
+    assert "no rate — nothing was determined" in out
+    assert "0.0%" not in out
+    assert "(0%)" not in out
+
+
+def test_eligible_count_never_divides_by_total():
+    """Structural, in the spirit of the summary() ternary test: the defect is the
+    denominator, so the denominator is what the test pins."""
+    import inspect
+    src = inspect.getsource(NMTCMapper.eligible_count)
+    body = "\n".join(ln for ln in src.splitlines()
+                     if not ln.lstrip().startswith("#"))
+    assert "eligible / total" not in body
+    assert "eligible / determined" in body
+
+
+# ── G2: the guard written for the wrong null sentinel ────────────────────────
+#
+# `if self.poverty_rate is not None:` is correct against the None the loader
+# emits and a NO-OP against what arrives, because pd.DataFrame(records) coerces
+# None -> NaN in a float column and NaN is not None. 1,583 poverty / 2,358 AMI
+# FOUND tracts rendered `nan%`. Third instance of the pattern in this portfolio.
+
+def _table_with_null_demographics():
+    """A found tract whose demographics are null, built through the SAME
+    coercion the live loader goes through — pd.DataFrame() on records carrying
+    Python None, not a hand-placed np.nan. If the coercion ever stops happening
+    this fixture stops reproducing the defect, which is the correct failure."""
+    df = pd.DataFrame([
+        {"tract_id": "01003990000", "nmtc_eligible": False,
+         "distress_level": "ineligible", "poverty_rate": None,
+         "ami_ratio": None, "unemployment_rate": 0.0,
+         "is_non_metro": False, "is_high_migration_rural": False,
+         "severe_distress": False, "deep_distress": False},
+        {"tract_id": "01003990001", "nmtc_eligible": True,
+         "distress_level": "lic", "poverty_rate": 0.25,
+         "ami_ratio": 0.70, "unemployment_rate": 0.09,
+         "is_non_metro": False, "is_high_migration_rural": False,
+         "severe_distress": False, "deep_distress": False},
+    ]).set_index("tract_id")
+    assert df["poverty_rate"].dtype == float          # the coercion happened
+    assert df.loc["01003990000", "poverty_rate"] is not None
+    assert pd.isna(df.loc["01003990000", "poverty_rate"])
+    return df
+
+
+def test_the_loader_coercion_that_defeats_the_guard_is_real():
+    """The premise, asserted rather than assumed: None goes into a float column
+    and NaN comes out, and `NaN is not None` is True."""
+    t = _table_with_null_demographics()
+    v = t.loc["01003990000", "poverty_rate"]
+    assert (v is not None) is True        # the old guard's test PASSES on NaN
+    assert pd.isna(v) is True             # ...and the value is still missing
+
+
+def test_found_tract_with_null_demographics_renders_not_available(capsys):
+    t = _table_with_null_demographics()
+    m = NMTCMapper.__new__(NMTCMapper)
+    m._table, m._oz_tracts, m.data_source = t, set(), "test"
+    r = m.check_tract("01003990000")
+    assert r.tract_found is True
+    assert r.eligibility_status == "verified-ineligible"
+    r.summary()
+    out = capsys.readouterr().out
+    assert "nan" not in out.lower()
+    assert out.count("not available") == 2            # poverty + AMI, not unemployment
+    pov = [ln for ln in out.splitlines() if "Poverty Rate" in ln][0]
+    assert "not available" in pov
+    assert "CDFI Fund published no value" in pov
+    # the metric that IS present is unaffected
+    assert "Unemployment:     0.0%" in out
+
+
+def test_the_two_kinds_of_missing_use_two_different_words(capsys):
+    """A found tract with no published metric and an indeterminate tract are two
+    different states. Rendering both as one word is what made this invisible."""
+    t = _table_with_null_demographics()
+    m = NMTCMapper.__new__(NMTCMapper)
+    m._table, m._oz_tracts, m.data_source = t, set(), "test"
+
+    m.check_tract("01003990000").summary()
+    found = capsys.readouterr().out
+    m.check_tract("99999999999").summary()
+    absent = capsys.readouterr().out
+
+    assert "not available" in found and "not available" not in absent
+    assert "tract not read" in absent and "tract not read" not in found
+    assert "nan" not in found.lower() and "nan" not in absent.lower()
+
+
+def test_a_real_value_still_renders_as_a_percentage(capsys):
+    t = _table_with_null_demographics()
+    m = NMTCMapper.__new__(NMTCMapper)
+    m._table, m._oz_tracts, m.data_source = t, set(), "test"
+    m.check_tract("01003990001").summary()
+    out = capsys.readouterr().out
+    assert "Poverty Rate:     25.0%" in out
+    assert "AMI Ratio:        70.0%" in out
+    assert "not available" not in out
+
+
+def test_pct_helper_covers_every_null_sentinel_pandas_can_produce():
+    """`pd.isna` rather than a second hand-written check: the lesson of three
+    instances of this pattern is that the sentinel is whatever the library that
+    touched the column last decided it was."""
+    import numpy as np
+    from nmtcmapper.eligibility.checker import _pct
+    assert _pct(None) == "❓ UNKNOWN — tract not read"
+    for null in (float("nan"), np.nan, np.float64("nan"), pd.NA, pd.NaT):
+        assert _pct(null).startswith("not available"), repr(null)
+    assert _pct(0.0) == "0.0%"
+    assert _pct(0.197) == "19.7%"
+    assert _pct(1.0) == "100.0%"
+
+
+def test_summary_no_longer_guards_the_metrics_on_is_not_None():
+    """Structural: the wrong-sentinel guard must not come back."""
+    import inspect
+    src = inspect.getsource(EligibilityResult.summary)
+    for field in ("poverty_rate", "ami_ratio", "unemployment_rate"):
+        assert f"self.{field} is not None" not in src, field
+
+
+def test_the_metric_lines_are_never_silently_omitted(capsys):
+    """Omitting the line was a THIRD rendering of missing, indistinguishable from
+    "nobody looked". All three lines print on every path."""
+    t = _table_with_null_demographics()
+    m = NMTCMapper.__new__(NMTCMapper)
+    m._table, m._oz_tracts, m.data_source = t, set(), "test"
+    for tid in ("01003990000", "01003990001", "99999999999"):
+        m.check_tract(tid).summary()
+        out = capsys.readouterr().out
+        for label in ("Poverty Rate:", "AMI Ratio:", "Unemployment:"):
+            assert label in out, (tid, label)
+
+
+def test_empty_batch_has_no_match_rate(capsys):
+    """Found by the G1 denominator sweep, fixed with G2's rendering family:
+    `matched/total` on an empty batch is a numpy scalar divide, so it returned
+    nan rather than raising, and printed "nan% match rate"."""
+    from nmtcmapper.geocoder.census import geocode_batch
+    out_df = geocode_batch(pd.DataFrame({"address": []}), address_col="address")
+    out = capsys.readouterr().out
+    assert len(out_df) == 0
+    assert "nan" not in out.lower()
+    assert "no match rate — the batch was empty" in out
+
+
+# ── live: G1 and G2 against the real 85,395-row file ─────────────────────────
+
+@pytest.mark.live
+def test_live_no_found_tract_renders_nan(capsys):
+    """1,583 poverty + 2,358 AMI null cells on the live file, and zero of them
+    may reach a rendered summary as `nan%`. Driven over every found tract that
+    has a null metric, not a sample of them."""
+    table = load_eligibility_table()
+    m = NMTCMapper.__new__(NMTCMapper)
+    m._table, m._oz_tracts, m.data_source = table, set(), "cdfi_fund"
+
+    null_pov = table.index[table["poverty_rate"].isna()]
+    null_ami = table.index[table["ami_ratio"].isna()]
+    assert len(null_pov) == 1_583
+    assert len(null_ami) == 2_358
+
+    for tid in set(null_pov) | set(null_ami):
+        r = m.check_tract(tid)
+        assert r.tract_found is True          # FOUND tracts, not indeterminate
+        r.summary()
+        out = capsys.readouterr().out
+        assert "nan" not in out.lower(), tid
+        assert "not available" in out, tid
+        assert "tract not read" not in out, tid
+
+
+@pytest.mark.live
+def test_live_pct_of_determined_on_a_real_mixed_frame(capsys):
+    """The 1/1/8 shape with real GEOIDs: two rows in the live table with opposite
+    verdicts, eight absent."""
+    table = load_eligibility_table()
+    m = NMTCMapper.__new__(NMTCMapper)
+    m._table, m._oz_tracts, m.data_source = table, set(), "cdfi_fund"
+
+    eligible_tid = table.index[table["nmtc_eligible"]][0]
+    ineligible_tid = table.index[~table["nmtc_eligible"]][0]
+    absent = [f"9999999999{i}" for i in range(8)]
+    df = pd.DataFrame({"tract_id": [eligible_tid, ineligible_tid] + absent})
+    out = m.eligible_count(enrich_dataframe(df, table, tract_col="tract_id"))
+
+    assert out["total"] == 10
+    assert out["determined"] == 2
+    assert out["indeterminate"] == 8
+    assert out["pct_eligible_of_determined"] == 50.0
+    assert "pct_eligible" not in out
