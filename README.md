@@ -226,12 +226,23 @@ A census tract qualifies as a Low-Income Community (LIC) if it meets ANY of:
 
 - Poverty rate >= 20%  — 26 U.S.C. §45D(e)(1)(A)
 - Median Family Income <= 80% of metro/state AMI  — §45D(e)(1)(B)
-- Median Family Income <= 85% of the applicable area AMI, for a tract in a
-  **high migration rural county** — §45D(e)(5), added by section 223 of the
-  American Jobs Creation Act of 2004. A high migration rural county is one with
+- Median Family Income <= 85% of the applicable area AMI, for a **non-metropolitan**
+  tract in a **high migration rural county** — §45D(e)(5), added by section 223 of
+  the American Jobs Creation Act of 2004. A high migration rural county is one with
   net out-migration of at least 10% of its population over the 20 years ending
   with the most recent census. 1,422 tracts carry this designation and 168 of
   them qualify on this route alone.
+
+  **Both conjuncts are required, and the second is not obvious from the statute.**
+  §45D(e)(5)(A) substitutes 85% into §45D(e)(1)(B)**(i)** — the *non-metropolitan*
+  branch — so the band cannot reach a metropolitan tract, which is governed by
+  (1)(B)(ii) and never touched by the substitution. But §45D(e)(5)(B) defines
+  "high migration rural county" by out-migration alone, with **no rurality and no
+  metro test**, so the designation by itself does not carry the non-metro
+  requirement. On the current published file all 1,422 HMR tracts are non-metro,
+  which makes the conjunct redundant as an empirical property of one file and not
+  as a logical one — a test asserts the metro-HMR count is 0 and will fail loudly
+  the day the Fund publishes one.
 
 The CDFI Fund publishes the first two routes in the file's column C and the
 third in column N, and has moved the boundary between those columns once (July
@@ -452,10 +463,10 @@ those changes must not move.
     # docs-check: skip shell command; the suite is run by CI, not by this gate
     PYTHONPATH=. pytest tests/ -v
 
-192 tests across all modules (including fail-loud, explicit-sample-mode,
+193 tests across all modules (including fail-loud, explicit-sample-mode,
 tri-state eligibility, fabricated-negative, null-sentinel-rendering,
-percentage-denominator, exception-hierarchy-shape, cell-value-allowlist,
-async-batch, cache-poisoning and schema-drift coverage).
+percentage-denominator, bool-coercion, exception-hierarchy-shape,
+cell-value-allowlist, async-batch, cache-poisoning and schema-drift coverage).
 14 of these are `@live` tests that hit the real CDFI Fund / Census endpoints; CI
 deselects them with `-m "not live"`, leaving 178 offline.
 

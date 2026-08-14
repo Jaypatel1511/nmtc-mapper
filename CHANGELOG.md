@@ -463,9 +463,146 @@ what the docs had to say.
   **0.6.0's**. The stale *"planned for 0.4.1"* promise in `census.py`, which 0.4.1
   and 0.4.2 both shipped without, is corrected to 0.6.0 with the reason.
 
-### Recorded, not fixed — all 0.6.0 unless noted
+### Fixed after the second audit — the two artifacts that still reproduced the thesis
 
-Found and driven this release; each is deliberately out of scope.
+The library itself was cleared: every invariant re-derived from the data, the
+denominator and null-sentinel fixes verified against the installed wheel, the
+ledger's twelve entries all closed by fixing the claim rather than deleting the
+assertion. What the audit found still standing was **the release's own thesis,
+committed as a number, in the two places a reader meets this package first.**
+
+- **The flagship notebook computed `eligible / count` and shipped a fabricated
+  `0.0%` as stored output.** `examples/nmtc_eligibility_demo.ipynb` was untouched
+  by 0.5.0 — last modified at `e3fc020` (0.4.2) — and its by-project-type cell
+  divided by `count`, which is `total` under another name. The portfolio's
+  deliberately-invalid tract id is its own project type, "Data Quality": one
+  `not-found` project, $750k, `eligibility_status='not-found'`,
+  `distress_level='unknown'`. It was published as **0.0% NMTC eligible** — the
+  exact fold this release exists to remove, under the exact name this release
+  removed, in the project's own demonstration notebook, **committed as stored
+  output so it renders on GitHub without anyone executing anything.** The summary
+  cell above it compounded it with the 0.4.3 headline `NMTC Eligible: 3 (50.0%)`.
+
+  The cell now aggregates a `determined` column off `eligibility_status` and
+  divides by it, leaving `NA` where `determined == 0` — mirroring
+  `eligible_count()`, which returns `None` rather than a rate over an empty set.
+  **The notebook was re-executed end to end against the installed 0.5.0 wheel**
+  (from a directory with no `./nmtcmapper`), not hand-edited: a hand-written
+  notebook output is a fabricated number, which is the thing this release is
+  about. Only that one cell's source changed; all 19 cells and their ids are
+  intact and the execution counts are sequential 1–9.
+
+  ```
+  before:  Data Quality      1        750000              0           0.0
+  after:   Data Quality      1        750000              0        0   NaN
+           NMTC Eligible:    3 (50.0%)        ->   3 of 5 determined (60.0%)
+  ```
+
+  The re-execution also cleared two stale outputs recorded as deferred below:
+  the export cell's column list, which still named the deleted
+  `is_nmtc_native_area`, and the import cell's banner, which still read
+  `nmtc-mapper 0.4.2`.
+
+  **Blast radius, stated precisely: `examples/` ships in neither artifact.**
+  `MANIFEST.in` does not include it and `pyproject.toml`'s package-data does not
+  reach it — verified by listing both built artifacts, zero hits in each. This is
+  a repository-and-GitHub surface. It is the first thing a reader sees on the
+  project page and it reached no installed user.
+
+- **The bundled methodology named a key the release deliberately made raise.**
+  `nmtcmapper/methodology/fabricated_negatives.md` §M8.4 described
+  `eligible_count()` as returning *"a dict of eight summary figures (`total`,
+  `nmtc_eligible`, `pct_eligible`, …)"*. Against the installed wheel it returns
+  **nine**, and `out["pct_eligible"]` raises `KeyError` — by design, documented
+  four screens up in this file. A user following this release's own instruction
+  to read the bundled methodology was told to read the one key this release
+  removed. **This is the item that reached installed users**; the notebook did
+  not. The passage now names the live nine keys, names `determined` and
+  `pct_eligible_of_determined`, and states that the latter is `None` when
+  `determined == 0`. Verified by reading it back out of the built wheel, not out
+  of the source tree.
+
+  A scoped sweep of the remaining 114KB for the same class of error found **no
+  second instance**. The document's other 25 `is_nmtc_native_area` references and
+  its two `bool`-typed field listings are pre-fix source quoted as history or
+  decisions addressed to the build, all correctly framed — §1's code block is
+  introduced with *"the package documents this in its own source and ships it
+  anyway."*
+
+- **`docs/quickstart.md` and `docs/api.md` still documented the 0.4.x types.**
+  Both were untouched by 0.5.0. Quickstart typed `severe_distress` and
+  `deep_distress` as plain `bool` — the release's headline type change — listed
+  **8** columns where `.enrich()` writes **10** (omitting `is_non_metro` and
+  `is_high_migration_rural`), and described the metrics as *"None if
+  indeterminate"* with no mention of the `NaN` state. `api.md`'s attribute table
+  had the same gaps and omitted `is_opportunity_zone`, `unemployment_rate`,
+  `address` and both properties. `docs-check` reads only `README.md`, so it is
+  structurally incapable of seeing either file.
+
+  Both tables now carry the tri-state types, all ten columns, the `!= True`
+  filter, and the two distinct null states — `None` = tract not read, `NaN` =
+  found but the Fund published no value. Nothing was deleted from either file.
+
+  **These pages are not published anywhere.** The `gh-pages` branch was deleted
+  during the 0.4.3 cycle — `origin` now carries `refs/heads/main` alone — and
+  `https://jaypatel1511.github.io/nmtc-mapper/` returns **404**, checked live this
+  session. They are reachable only by someone browsing the repository. No
+  published documentation site was wrong, and none is fixed here.
+
+- **The 85% band's non-metro conjunct was in the code and not in the README.**
+  The code applies `high_migr & non_metro & (ami <= 0.85)`, which is correct:
+  §45D(e)(5)(A) substitutes 85% into §45D(e)(1)(B)**(i)**, the non-metropolitan
+  branch, so the band cannot reach a metro tract. §45D(e)(5)(B) defines "high
+  migration rural county" by **out-migration alone** — no rurality test, no metro
+  test — which is precisely why the conjunct is needed and why it is not obvious
+  from the statute's own wording. `README.md` stated the band without it, and
+  `docs/eligibility.md` labelled the row "(rural)" without it either. Both now
+  carry the conjunct and one clause of why.
+
+  Zero behavioural effect, measured rather than assumed: metro ∧ HMR is **0** on
+  the live file and the with/without symmetric difference is **0** across all
+  85,395 rows. The methodology branch spent a whole commit (`d2409b2`) restoring
+  this conjunct and the README did not carry the reason it exists.
+
+- **The `bool(...)` coercion on `check_tract()`'s found path is now pinned.** Four
+  `is None` guards — `_tri(is_non_metro)`, `_tri(is_high_migration_rural)`, and
+  `nmtc_eligible is None` in both `eligibility_status` and `summary()` — are
+  correct **only** because the found path wraps the field in `bool(...)` first.
+  Strip the wrapper and a `NaN` reaches them intact: `NaN is not None`, so the
+  guard is skipped, and `NaN` is truthy, so `_tri` returns `"Yes"`. That is a
+  fabricated **positive** — strictly worse than the negative this release removes,
+  because a false "eligible" closes a deal that does not qualify. Unreachable
+  today (all four source columns are `dtype=bool` with no possible `NaN`), which
+  is exactly why it needed pinning rather than fixing. One structural test,
+  mutation-proven red against a stripped-wrapper checkout. **193 tests.**
+
+#### Corrections to this changelog's own record
+
+Two figures carried into the fix cycle's brief were checked against the
+repository before anything was edited. **Neither had ever entered the repository**,
+so there was no correction site in either artifact and no file was changed for
+either. They are corrected here, to the record.
+
+- **"3,941 null-metric found tracts" is a sum reported as a count.** `len(poverty_null)`
+  is 1,583 and `len(ami_null)` is 2,358; 3,941 is their **sum**, and the two sets
+  overlap in **1,191** tracts. The distinct count is the union, **2,750** — 75.2%
+  of every poverty-null tract is also AMI-null, because the same sparsity drives
+  both suppressions. `checker.py:87` already carried 2,750 and the live test
+  drives the union, so the **code was right and only a prose figure overreached**.
+  Direction matters and is easy to invert: **3,941 overstates the distinct count
+  by 43%** (equivalently, 2,750 is 30% fewer than 3,941). It is *not* "43% fewer".
+  Verified: `git grep "3,941\|3941"` over the tree returns one hit, inside a
+  minified Japanese tokenizer dictionary in `site/assets/javascripts/lunr/tinyseg.js`,
+  which is a coincidence and not this figure.
+- **"the `census.py` match-rate fix is pinned by 8 tests" — it is pinned by 1, and
+  that claim is not in the repository either.** Reverting the match-rate line to
+  its 0.4.3 form turns exactly one test red,
+  `test_empty_batch_has_no_match_rate`; the fix is genuinely pinned, and pinned
+  adequately. The repository's only "eight tests" claim is the one above under
+  the denominator bullet, where it refers to the **`mapper.py` denominator fix,
+  not to `census.py`**, and where it is accurate: `afa1da8` added exactly eight
+  tests for it. Seven of the eight go red on a full revert of that fix; the
+  eighth pins the three-state partition, which the revert does not disturb.
 
 - **The 12-tract sample fixture cannot reach any of the three rules this release
   corrected** — driven row by row, not assumed. No tract sits at exactly 30.0% or
@@ -483,15 +620,79 @@ Found and driven this release; each is deliberately out of scope.
 - **`opportunity_zone_status` returns `not-confirmed` for input that was never a
   GEOID**, where `eligibility_status` correctly says `not-found`. The property
   tests only `tract_id is None`.
-- **`examples/nmtc_eligibility_demo.ipynb:560` has stale cached output** listing the
-  deleted column. It ships in neither artifact; regenerate when the skill's worked
-  examples are re-executed.
+- ~~**`examples/nmtc_eligibility_demo.ipynb:560` has stale cached output** listing
+  the deleted column.~~ **Closed above.** The notebook was re-executed end to end
+  against the installed wheel as part of the denominator fix, which cleared this
+  line as a side effect. Confirmed gone: zero occurrences of `is_nmtc_native_area`
+  anywhere in the file.
 - **`docs-check.toml` still claims "114 tests" — in ONE comment now, not two.**
   Two releases stale. `docs-check.toml:33` survives as a worked example of the
   claim pattern (*"Matches a line like `114 tests across all modules …`"*). The
   second occurrence, the assertion-3 note, sat inside the ledger rationale block
   this release rewrote, so it went with the twelve entries rather than being fixed
-  on its own. The live claim and the gate both read **192**.
+  on its own. The live claim and the gate now both read **193**.
+
+### Not done, deliberately — 0.5.1
+
+Each of these was found, reproduced, and left alone. One line each; the reason is
+the point.
+
+- **A uniqueness guard on the eligibility table index.** The live index is unique
+  (0 duplicates) and a duplicate GEOID already fails loud — `.loc[]` returns a
+  DataFrame and `check_tract` raises `ValueError: truth value of a Series is
+  ambiguous` from the `bool()` wrapper pinned above. Converting that into a named
+  `EligibilitySchemaError` is **new logic in the loader path** on a release
+  already built twice and audited twice.
+- **Deleting the dead docs pipeline** — `docs/`, `site/`, `mkdocs.yml`, **59
+  tracked files** (6 + 52 + 1). Arguably the cleaner move, with direct precedent:
+  the 0.4.3 cycle retired `gh-pages` for exactly this class of defect. But it is a
+  repo-structure decision, not a fix, and this is a fix cycle. See the standing
+  `site/` entry under 0.4.3, whose durable-fix choice is still open.
+- **`site/quickstart/index.html` and `site/api/index.html` now disagree with their
+  sources.** The rendered copies carry the same `severe_distress | bool` typing
+  just corrected in `docs/`, and `site/search/search_index.json` indexes it a
+  third time. 0.4.3's precedent was to run `mkdocs build` and commit; that is 52
+  files and publishes nothing, because the site is not served (404). Recorded
+  loudly rather than rebuilt, and it does not widen the defect's reach: nothing
+  reads `site/` except someone browsing the repository, which is also the only way
+  to reach `docs/`.
+- **Origin-asserting the version claim.** A stray `.dist-info` in cwd makes
+  `importlib.metadata` report a wrong version while the `__file__` origin
+  assertion still passes — demonstrated live at `9.9.9`. Not reachable in the
+  current pipeline (`TESTDIR` is freshly made; the build job produces
+  `.egg-info`, not `.dist-info`). One-line hardening: also assert
+  `md.distribution("nmtc-mapper").locate_file("")` sits under the same
+  site-packages as `nmtcmapper.__file__`.
+- **A `pytest_configure` origin hook.** Nothing enforces artifact origin for
+  pytest itself — the assertion lives in two release-workflow shell steps, so a
+  human running the suite from an unpacked sdist reproduces exactly the error
+  BUILD 2 caught and the suite will not object. Proposed shape: a
+  `tests/conftest.py` hook asserting `"site-packages" in nmtcmapper.__file__` when
+  `NMTC_REQUIRE_INSTALLED=1`, same polarity as `docs_check.py --allow-source`.
+- **A README-table binding test for `opportunity_zone_status`.** It is a property,
+  invisible to `docs-check`; ~15 lines reusing
+  `test_c1b_the_readme_and_the_docstring_draw_the_same_tree`'s machinery.
+- **`mapper.py:26-28` over-attributes the OZ gap.** The 1,408 designated-but-unmatched
+  GEOIDs are 1,332 tract-vintage + 1 county-vintage (Shannon County SD `46113` →
+  Oglala Lakota `46102`, renumbered 2015) + 75 territory coverage gap (AS 60,
+  GU 66, MP 69, VI 78 have zero rows in the Fund's table). Those 75 are not a
+  vintage miss at all. The blanket 2010/2020 attribution is true as a statement of
+  fact and over-reaching as a cause. The README's not-confirmed row already names
+  Island Areas as a third reason, so this is a one-sentence precision fix — but it
+  is prose about the OZ contract and belongs with the binding test above.
+- **§M8.4's own rename decision was never executed.** The shipped methodology
+  decides *"rename `eligible_count` → `summarize_eligibility`, keep
+  `eligible_count` as an alias emitting `DeprecationWarning`, remove the alias in
+  0.6.0"*, and says it costs nothing "in the release that is already touching the
+  API". No `summarize_eligibility` exists anywhere in the package. Found while
+  correcting the passage immediately above it; left alone because reversing or
+  executing a design decision is not a mechanical fix.
+- **The notebook's Summary cell advertises the 404 docs URL.**
+  `**Docs:** https://jaypatel1511.github.io/nmtc-mapper` — a dead link on the one
+  surface a GitHub reader is most likely to open. It is one of four surviving
+  references to that host (`mkdocs.yml:3`, `CHANGELOG.md:600`, the methodology at
+  `:1382`, and this one), so it belongs with the docs-pipeline decision above
+  rather than as a one-line patch.
 
 ## [0.4.3] — 2026-08-09
 

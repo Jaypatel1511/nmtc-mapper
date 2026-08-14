@@ -1460,8 +1460,16 @@ The brief calls this a naming smell where "one should go." **Neither should go �
 they are different things**, and deleting either would remove functionality:
 
 - `NMTCMapper.eligible_count(df)` — a **method** taking a user DataFrame, returning
-  a dict of eight summary figures (`total`, `nmtc_eligible`, `pct_eligible`, the
-  three distress counts, `ineligible`, `indeterminate`) and printing a block.
+  a dict of nine summary figures (`total`, `determined`, `nmtc_eligible`,
+  `pct_eligible_of_determined`, the three distress counts, `ineligible`,
+  `indeterminate`) and printing a block. **`pct_eligible` is not among them**: it
+  divided by `total`, and 0.5.0 replaced it with `pct_eligible_of_determined`,
+  which divides by `determined` (`nmtc_eligible + ineligible`) and is returned
+  alongside `determined` so the denominator is a number the caller can read rather
+  than one they infer. The old key was removed rather than redefined, so
+  `out["pct_eligible"]` raises `KeyError`. `pct_eligible_of_determined` is `None` —
+  not `0.0` — when `determined == 0`, because a rate over an empty set asserts a
+  verdict about rows nothing was read for.
 - `NMTCMapper.eligible_tract_count` — a **property** with no arguments, returning
   one integer: how many of the 85,395 loaded tracts are eligible.
 

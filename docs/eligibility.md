@@ -13,7 +13,20 @@ A census tract qualifies if it meets ANY of the following:
 |-----------|-----------|
 | Poverty rate | >= 20% |
 | Median Family Income (metro) | <= 80% of metro/state AMI |
-| Median Family Income (rural) | <= 85% of state AMI |
+| Median Family Income (high migration rural) | <= 85% of state AMI, **and** the tract must be non-metropolitan |
+
+The 85% row needs **both** conjuncts. §45D(e)(5)(A) substitutes 85% into
+§45D(e)(1)(B)**(i)** — the non-metropolitan branch — so the band cannot reach a
+metropolitan tract. But §45D(e)(5)(B) defines "high migration rural county" by
+out-migration alone, with no rurality and no metro test, so the designation on its
+own does not carry the non-metro requirement. The shipped rule applies
+`is_high_migration_rural & is_non_metro & (ami <= 0.85)`. Through 0.4.3 the rule
+read `is_non_metro` *in place of* the high-migration-rural designation, which
+granted LIC to **932 tracts on non-metro status alone**; the corrected rule
+reproduces the Fund's published column C with 0 disagreements across all 85,395
+rows. On the current file all 1,422 HMR tracts are non-metro, so the non-metro
+conjunct changes no row today — it is written out because that is a property of
+one published file, not of the statute.
 
 ## Distress Levels
 

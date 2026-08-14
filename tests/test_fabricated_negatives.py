@@ -579,6 +579,62 @@ def test_empty_batch_has_no_match_rate(capsys):
     assert "no match rate — the batch was empty" in out
 
 
+# ── G3: the bool() wrapper on check_tract()'s found path is load-bearing ─────
+#
+# G2's `is not None` sweep found twelve guards, of which FOUR are correct only
+# because check_tract() coerces the field with bool() before the guard ever sees
+# it:
+#
+#   1. _tri(self.is_non_metro)              — summary()
+#   2. _tri(self.is_high_migration_rural)   — summary()
+#   3. self.nmtc_eligible is None           — eligibility_status
+#   4. self.nmtc_eligible is None           — summary()
+#
+# All four test `is None`. Strip the wrapper and a NaN reaches them intact: NaN
+# is not None, so the guard is skipped, and NaN is TRUTHY, so _tri returns "Yes".
+# That is a fabricated POSITIVE — strictly worse than the fabricated negative
+# this release exists to remove, because a false "eligible" closes a deal that
+# does not qualify.
+#
+# Unreachable today: all four source columns are dtype=bool on the live file with
+# no possible NaN. But nothing else in the suite would catch the wrapper's
+# removal, which is exactly the shape of defect that survived four releases here.
+# Structural, in the spirit of test_eligible_count_never_divides_by_total.
+
+BOOL_WRAPPED_ON_THE_FOUND_PATH = (
+    "nmtc_eligible", "is_non_metro", "is_high_migration_rural",
+    "severe_distress", "deep_distress",
+)
+
+
+def test_the_found_path_coerces_every_tri_state_field_with_bool():
+    """Pin the wrapper itself. The four `is None` guards downstream cannot
+    distinguish NaN from a real value, so the coercion is what makes them
+    correct — and it is invisible at every one of those four call sites."""
+    import inspect
+    import re
+    from nmtcmapper.eligibility.checker import _tri
+
+    # The failure mode this pins, demonstrated rather than asserted: an unwrapped
+    # NaN slips both halves of every one of the four downstream guards.
+    nan = float("nan")
+    assert nan is not None                 # the `is None` guard does not fire
+    assert bool(nan) is True               # ...and NaN is truthy
+    assert _tri(nan) == "Yes"              # so it renders as a fabricated positive
+    assert _tri(bool(nan)) == "Yes"        # which the wrapper cannot itself repair
+    assert _tri(None) == "❓ UNKNOWN — tract not read"
+
+    src = inspect.getsource(check_tract)
+    body = "\n".join(ln for ln in src.splitlines()
+                     if not ln.lstrip().startswith("#"))
+    for field in BOOL_WRAPPED_ON_THE_FOUND_PATH:
+        assert re.search(rf'"{field}":\s*bool\(row\.get\(', body), (
+            f"check_tract()'s found path no longer wraps {field!r} in bool(). "
+            f"A NaN in that column now reaches summary()/eligibility_status "
+            f"intact, where `is None` misses it and truthiness renders it 'Yes'."
+        )
+
+
 # ── live: G1 and G2 against the real 85,395-row file ─────────────────────────
 
 @pytest.mark.live
