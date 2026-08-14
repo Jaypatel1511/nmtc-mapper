@@ -2,7 +2,7 @@
 
 All notable changes to nmtc-mapper are documented here.
 
-## [0.5.0] — unreleased
+## [0.5.0] — 2026-08-13
 
 **The fabricated-negative release.** 0.4.0 built a tri-state contract for the
 verdict and left its neighbours fabricating inside the very branches it was

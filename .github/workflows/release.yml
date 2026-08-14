@@ -480,18 +480,21 @@ jobs:
           #
           # FLOOR DERIVATION -- not a number picked to be safe, and the reason
           # this is not another `-lt 14`. The rule is HALF of what the suite
-          # genuinely runs today, rounded down to a round number. Measured on
-          # this tarball: 111 tests executed under this job's exact invocation
-          # (3 more are `live` and deselected, and are correctly NOT counted
-          # toward the floor). Half is 55, so the floor is 55.
+          # genuinely runs today, floored to an integer. Measured on
+          # this tarball at 0.5.0: 179 tests executed under this job's exact invocation
+          # (14 more are `live` and deselected, and are correctly NOT counted
+          # toward the floor). 179 / 2 = 89.5, floored to 89. Was 55, derived the
+          # same way from the 111 executed at 0.4.x; the suite grew and the
+          # constant did not, leaving a gate that passed with two thirds of
+          # the suite silently missing. Re-derive whenever the suite resizes.
           #
           # Half, deliberately: the rejected `-lt 14` threshold sat at the
           # exact count shipping that day, so deleting one test module failed
           # the job with a packaging error for a deliberate source change.
-          # This one has 56 tests of headroom -- you would have to delete more
+          # This one has 90 tests of headroom -- you would have to delete more
           # than half the suite before it complains, while total deselection
           # lands at 0 and trips it immediately.
-          FLOOR=55
+          FLOOR=89
           EXECUTED="$(python - "${RUNNER_TEMP}/sdist-junit.xml" <<'PY'
           import sys, xml.etree.ElementTree as ET
           root = ET.parse(sys.argv[1]).getroot()
