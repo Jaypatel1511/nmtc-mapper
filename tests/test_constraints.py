@@ -178,7 +178,12 @@ def test_c1b_the_readme_and_the_docstring_draw_the_same_tree():
     # NOT a skip. Every context that runs this suite ships README.md beside
     # tests/: the checkout, the sdist (MANIFEST.in `include README.md` plus
     # `recursive-include tests *.py` — both verified present in the 0.5.0
-    # tarball), and the docs-check harness, which copies both. A skip here would
+    # tarball); the docs-check harness, which copies both; and release.yml's
+    # test-wheel job, which copies it beside pyproject.toml. That fourth
+    # context was NOT true when this assertion was written: the enumeration
+    # was verified against the tarball and asserted of every context, and
+    # v0.5.0's first Release run failed on all four interpreters because of
+    # it. The workflow was corrected; the assertion was not softened. A skip here would
     # be a test that certifies nothing while reporting green, which is the same
     # vacuity class `empty_parameter_set_mark = "fail_at_collect"` closes in
     # pyproject.toml.

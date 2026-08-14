@@ -320,6 +320,7 @@ jobs:
           # changes nothing about what is under test -- the WHEEL still supplies
           # the package, which is what the origin assertion above pins down.
           cp pyproject.toml "${TESTDIR}/pyproject.toml"
+          cp README.md "${TESTDIR}/README.md"
           cd "${TESTDIR}"
 
           # Assert the import really came from the installed wheel. Without
