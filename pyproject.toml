@@ -30,7 +30,11 @@ dependencies = [
 dev = ["pytest>=7.0"]
 
 [project.urls]
-Homepage = "https://github.com/Jaypatel1511/nmtc-mapper"
+Homepage = "https://jaypatel1511.github.io/cdfi-superpowers/"
+Repository = "https://github.com/Jaypatel1511/nmtc-mapper"
+Documentation = "https://github.com/Jaypatel1511/nmtc-mapper#readme"
+Issues = "https://github.com/Jaypatel1511/nmtc-mapper/issues"
+Changelog = "https://github.com/Jaypatel1511/nmtc-mapper/blob/main/CHANGELOG.md"
 
 # Explicit discovery: the repo root also contains a generated `site/` (mkdocs
 # output) and `docs/`, `examples/` dirs. With the setup.py pin removed, build-time
