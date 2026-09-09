@@ -2,6 +2,166 @@
 
 All notable changes to nmtc-mapper are documented here.
 
+## [0.6.0] — unreleased
+
+**The OZ 2.0 restoration.** `docs/oz2-methodology.md` was written 2026-08-05 as a
+complete pre-implementation decision document and 0.5.0 shipped none of it. This
+release builds what that document ruled: two tri-state flags on
+`EligibilityResult`, sourced from Treasury's OZ 2.0 data-transparency file, plus
+the GEOID-scheme binding that makes them safe.
+
+**Nothing here is a designation, and nothing can be.** Every flag concerns
+*eligibility for nomination*. The nomination window runs to 2026-10-28 at the
+latest under the §1400Z-1(b)(2) extension, and the Secretary's consideration
+period to 2026-12-28. A State may designate only 25% of its LICs — 25 tracts
+where it has fewer than 100, and the quotient rounds up — so a State's eligible
+tracts materially exceed what it may ever designate. `True` is not "will be an OZ".
+
+**No NMTC number moves.** The NMTC table, its verdict logic and `is_opportunity_zone`
+are untouched. This release adds a second source on a second tract scheme; it
+does not reinterpret the first.
+
+---
+
+### UPGRADING FROM 0.5.0 — READ THIS FIRST
+
+**`EligibilityResult` now carries two fields whose names both begin "OZ" and whose
+`False` mean opposite things.** This is the same hazard shape as 0.5.0's
+`bool → Optional[bool]`, and it is enumerated here for the same reason: it does
+not break loudly.
+
+| field | program | `True` | `False` | `None` |
+|---|---|---|---|---|
+| `is_opportunity_zone` | OZ **1.0** (2018 designations, 2010-basis) | on the designation list | **never returnable** | everything else |
+| `is_oz2_nomination_eligible` | OZ **2.0** (2026 eligibility, 2020-basis / 2024 vintage) | eligible for nomination | **a real published fact** | not scored, or wrong key scheme |
+
+| call shape | before | after | replacement |
+|---|---|---|---|
+| `if not r.is_oz2_nomination_eligible:` | — | catches the ineligible **and** every indeterminate and refused tract | `if r.oz2_nomination_status.startswith("ineligible"):` |
+| `if r.is_rural_area_qoz_eligible:` | — | silently excludes every non-eligible tract, which is most of them | switch on `r.rural_area_qoz_status` |
+| `r.is_oz2_nomination_eligible is False` | — | true for tracts Treasury scored **and** for tracts it had no data for | `r.oz2_nomination_status == "ineligible-on-treasury-inputs"` |
+| treating the two OZ fields as one answer | — | they are different programs on different tract schemes | read both status strings |
+| `df[~df.is_oz2_...]` | — | `TypeError` on an object column holding `None` | filter with `!= True` |
+
+**Read the status strings, not the booleans.** `oz2_nomination_status` and
+`rural_area_qoz_status` are the supported surface, exactly as
+`opportunity_zone_status` is for OZ 1.0.
+
+---
+
+### Added
+
+- **`is_oz2_nomination_eligible`** — `Optional[bool]`, from Treasury's
+  `eligible_lic` column. `True` for 25,332 tracts, `False` for 60,197, `None` for
+  a tract absent from the 85,529-row universe or keyed on a scheme Treasury does
+  not use.
+
+  A `False` is returnable here — and only here — because the source is a **full
+  tract universe carrying an explicit 0/1**, not a list of the eligible.
+  Rev. Proc. 2026-14 §5.04 states in its own words that the Appendix is **not
+  exhaustive** and reserves a live mechanism for nominating an unlisted tract, so
+  absence from the *Appendix* could only ever be `None`. `False` means *"not an
+  eligible LIC on the 2020-2024 ACS / 2020 DECIA inputs Treasury used"* — a fact
+  about a published determination, not "not eligible".
+
+- **`is_rural_area_qoz_eligible`** — `Optional[bool]`, from `rural_status`,
+  **restricted to `eligible_lic == 1`**: `True` for 8,334, `False` for 16,998,
+  `None` for everything else. Treasury populates `rural_status` for the whole
+  universe, but its rural methodology determines rural status over *eligible*
+  tracts only; 20,377 ineligible tracts carry a rural flag and this package
+  reports none of them. A populated column is not a published determination.
+
+  The name does not say `is_rural`. The referent is not "this tract is rural" but
+  "this tract, *if* nominated and *if* designated, would be a QOZ comprised
+  entirely of a rural area" — §1400Z-2(b)(2)(C)(ii), relevant to QROF
+  qualification for amounts invested after 2026-12-31. Treasury's determination
+  also admits tracts that *do* overlap an urban area under a de minimis rule, so
+  `True` is not "contains no urban land".
+
+- **`oz2_nomination_status` / `rural_area_qoz_status`** — string accessors,
+  parallel to `opportunity_zone_status`.
+
+- **`OZ2DataError` / `OZ2DownloadError` / `OZ2ParseError` / `OZ2SchemaError`** — a
+  separate exception branch, so an `except OZDataError` written for the 2018
+  designation list does not start swallowing failures of a file it never knew about.
+
+- **A second tract binding, `OZ2_TRACT_BINDING`, with a derived GEOID-scheme
+  discriminator.** `TractVintage` validates *basis*, and basis cannot tell these
+  two tables apart: both are 2020-basis and both say "2020", and they are still
+  disjoint in Connecticut. The scheme is **derived from the loaded table's own
+  Connecticut keys** and asserted against the declaration — a discriminator a
+  maintainer sets by hand would certify consistency, not truth. A table with no
+  Connecticut rows cannot be classified and is **refused**, not defaulted.
+
+### Fixed
+
+- `license = {text = "MIT"}` replaced with the PEP 639 `license = "MIT"` plus
+  `license-files`; build requirement raised to `setuptools>=77`. The old form is
+  deprecated portfolio-wide with removal announced 2027-02-18. Verified rather
+  than assumed: setuptools 77.0.3, 78.1.1 and 80.9.0 all declare
+  `Requires-Python: >=3.9`, so the 3.9 floor is unaffected.
+
+### Known gaps — stated, not hidden
+
+- **Connecticut is refused, out loud.** The CDFI Fund keys Connecticut on legacy
+  counties (09001-09015); Treasury keys it on COG/planning regions
+  (09110-09190). The two share **zero** GEOIDs across 883 and 884 tracts
+  respectively, though their six-digit tract codes are identical sets — a pure
+  relabelling under 87 FR 34235. Every OZ 2.0 flag is `None` for a legacy CT key,
+  `oz2_nomination_status` returns `refused-connecticut-scheme`, and `summary()`
+  prints the refusal and the remedy. 243 eligible CT tracts are unanswerable
+  through this package's NMTC key; a CT answer requires a 09110-09190 key.
+
+  **No crosswalk is offered.** The mapping is mechanically available and even
+  bijective at the tract-code level. It is refused because the package would be
+  silently converting a published federal determination keyed to one geography
+  into an inferred determination on another, changing nothing about the column
+  name, the dtype or the row count.
+
+- **A `0` Treasury published with nothing behind it.** Found by execution during
+  this build; **not in the methodology, which counted the 0/1 partition but not
+  its nulls.** 1,080 tracts have *both* `poverty_rate` and `mfi_ratio` blank —
+  every input to the LIC test missing — and Treasury published `eligible_lic = 0`
+  for all of them. 1,047 are reachable through this package's own tract universe,
+  and 259 carry ordinary tract codes rather than the water/special codes one
+  would expect.
+
+  Treasury's own convention elsewhere in the file shows a missing input does not
+  by itself defeat eligibility: 1,068 tracts with a blank `mfi_ratio` and poverty
+  ≥ 20% were published `eligible_lic = 1`. So those 1,080 zeroes are zeroes only
+  because *nothing at all* was measurable.
+
+  **The value is still `False`** — 0 is what Treasury published, and this package
+  does not overrule a federal determination on its own arithmetic. But the
+  condition is surfaced: `oz2_nomination_status` returns
+  `ineligible-no-inputs-published` rather than `ineligible-on-treasury-inputs`,
+  and `oz2_inputs_missing` carries the provenance. **Callers who must not act on
+  an unmeasured negative should switch on the status string.** Whether the value
+  should instead be `None` is a decision for the methodology, not for a build.
+
+- The four DECIA territories (American Samoa, Guam, CNMI, USVI) have no row in
+  the CDFI Fund NMTC table at all, so their NMTC answer is `None` while their
+  OZ 2.0 answer is real — the one place OZ 2.0 is the more complete of the two.
+
+- The 25% per-State designation cap is **not modelled**. Treasury's arithmetic is
+  **not verified** — `False` means "Treasury published 0", not "0 is correct".
+  The rural determination's block-level spatial work is **not reproduced**.
+
+### Source
+
+Treasury OTA, `OZ2-Eligible-LIC-Tracts-Data-Transparency-03232026.xlsx`, sheet
+`oz2_for_data_transparency`. Pinned by digest and re-verified against the live
+file by a `@live` test rather than at load time: this file is *expected* to be
+revised — the companion Appendix sheet is named `..._cor` and the file's OOXML
+`dcterms:created` (2026-04-06) is two weeks after the date in its own filename —
+and a hard digest gate would turn every future Treasury correction into a total
+outage. Structure is what the loader enforces: all twelve headers, a row-count
+floor, a `{0, 1}` allowlist on both flag columns, and the GEOID scheme.
+
+**Every figure in this entry is asserted against Treasury's file at test time**
+(`tests/test_oz2.py::OZ2_PUBLISHED_FIGURES` → `tests/test_live_oz2_file.py`).
+None is typed by hand.
+
 ## [0.5.0] — 2026-08-13
 
 **The fabricated-negative release.** 0.4.0 built a tri-state contract for the

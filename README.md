@@ -147,10 +147,53 @@ substituting demo data. (Before 0.3.4 any failure silently fell back to a
         print(f"Could not load real NMTC data: {e}")
         raise
 
+### Opportunity Zone 2.0 — eligibility for nomination
+
+`EligibilityResult` carries two OZ 2.0 flags, sourced from Treasury's OZ 2.0
+data-transparency file. **They are a different program from `is_opportunity_zone`,
+which is OZ 1.0**, and the two are not versions of one answer: OZ 1.0 designations
+are 2010-tract-based, OZ 2.0 eligibility is 2020-basis on the 2024 TIGER vintage.
+Read the status strings rather than the booleans.
+
+    # docs-check: skip constructing NMTCMapper() downloads the CDFI Fund file
+    result = mapper.check_tract("17031840100")
+    result.oz2_nomination_status      # eligible-for-nomination | ineligible-on-treasury-inputs
+                                      # | ineligible-no-inputs-published
+                                      # | refused-connecticut-scheme | not-determined | no-tract
+    result.rural_area_qoz_status      # rural-eligible | not-rural-on-treasury-determination
+                                      # | not-determined-not-an-eligible-lic | ...
+
+`is_oz2_nomination_eligible` is `True` for 25,332 tracts and `False` for 60,197.
+The `False` is a real published fact — the source is a full tract universe of
+85,529 rows carrying an explicit 0/1, not a list of the eligible — and it means
+*"not an eligible LIC on the 2020-2024 ACS / 2020 DECIA inputs Treasury used"*,
+not "not eligible". Rev. Proc. 2026-14 §5.04 states the Appendix is **not
+exhaustive** and reserves a mechanism for nominating an unlisted tract.
+
+`is_rural_area_qoz_eligible` is restricted to tracts that are eligible LICs:
+`True` for 8,334, `False` for 16,998, `None` otherwise. Treasury populates its
+rural column for the whole universe, but determines rural status over *eligible*
+tracts only, so the 20,377 ineligible-but-rural-flagged rows are reported as
+`None`. The flag does not mean "this tract is rural": it means the tract, if
+nominated and if designated, would be a QOZ comprised entirely of a rural area.
+
+**Nothing here is a designation.** No tract has been designated a 2027 QOZ and
+none can be yet — the nomination window runs to 2026-10-28 at the latest and the
+Secretary's consideration period to 2026-12-28. A State may designate only 25% of
+its LICs, so `True` is not "will be an OZ".
+
+**Connecticut is refused, and says so.** The CDFI Fund keys Connecticut on legacy
+counties (09001-09015); Treasury keys it on COG/planning regions (09110-09190).
+The two share zero GEOIDs. A legacy CT key returns `None` from every OZ 2.0 flag
+with `oz2_nomination_status == "refused-connecticut-scheme"`; a CT answer requires
+a 09110-09190 key. No crosswalk is offered — converting a published federal
+determination onto another geography would be an inference wearing a
+determination's column name.
+
 ### Exception hierarchy
 
 Every class below is exported from the top level, so you can catch broadly or
-precisely. All twelve names are spelled out — a glob like `*DownloadError` is a
+precisely. All sixteen names are spelled out — a glob like `*DownloadError` is a
 gesture, and you cannot type a glob into an `except` clause.
 
     # docs-check: skip ASCII diagram of the exception hierarchy, not executable Python
@@ -163,6 +206,10 @@ gesture, and you cannot type a glob into an `except` clause.
     ├─ OZDataError                     the Opportunity Zone designation dataset could not be obtained
     │  ├─ OZDownloadError              403 / 404 / DNS / timeout / connection
     │  └─ OZParseError                 obtained but unreadable, or no recognizable tract column
+    ├─ OZ2DataError                    the OZ 2.0 nomination-eligibility dataset (Treasury) could not be obtained
+    │  ├─ OZ2DownloadError             403 / 404 / DNS / timeout / connection
+    │  ├─ OZ2ParseError                obtained but unreadable, or the oz2_for_data_transparency sheet is missing
+    │  └─ OZ2SchemaError               read, but the layout moved: column count, a renamed header, the row-count floor, a flag outside {0,1}, or a GEOID SCHEME that is not the one the binding declares
     └─ GeocoderError                   address -> census tract resolution failed
        ├─ GeocoderTransportError       unreachable or unreadable after retries: HTTP status, timeout, connection/DNS, undecodable body
        └─ AmbiguousAddressError        multiple matches resolving to DIFFERENT tracts, so there is no single right answer
@@ -175,6 +222,7 @@ Catch at whatever level you mean:
         EligibilityDataError, EligibilityDownloadError, EligibilityParseError,
         EligibilitySchemaError, EligibilityValueError,
         OZDataError, OZDownloadError, OZParseError,
+        OZ2DataError, OZ2DownloadError, OZ2ParseError, OZ2SchemaError,
         GeocoderError, GeocoderTransportError, AmbiguousAddressError,
     )
 
@@ -463,12 +511,13 @@ those changes must not move.
     # docs-check: skip shell command; the suite is run by CI, not by this gate
     PYTHONPATH=. pytest tests/ -v
 
-193 tests across all modules (including fail-loud, explicit-sample-mode,
+252 tests across all modules (including fail-loud, explicit-sample-mode,
 tri-state eligibility, fabricated-negative, null-sentinel-rendering,
 percentage-denominator, bool-coercion, exception-hierarchy-shape,
-cell-value-allowlist, async-batch, cache-poisoning and schema-drift coverage).
-14 of these are `@live` tests that hit the real CDFI Fund / Census endpoints; CI
-deselects them with `-m "not live"`, leaving 178 offline.
+cell-value-allowlist, async-batch, cache-poisoning, schema-drift, OZ 2.0
+answer-space, GEOID-scheme-discriminator and AST-vacuity coverage).
+25 of these are `@live` tests that hit the real CDFI Fund / Census / Treasury
+endpoints; CI deselects them with `-m "not live"`, leaving 227 offline.
 
 ---
 

@@ -27,6 +27,18 @@ from nmtcmapper.data.schema import TractVintage, TRACT_VINTAGE
 from nmtcmapper.geocoder.census import _geocoder_params, _geocode_single_async
 from nmtcmapper.mapper import NMTCMapper
 
+# 0.6.0: hand-built NMTCMapper instances need the OZ 2.0 table too. An EMPTY
+# frame, not the sample: these tests assert on the NMTC/OZ-1.0 surfaces, and an
+# empty OZ 2.0 universe makes every OZ 2.0 answer `not-determined`, which is the
+# correct reading of "this test supplied no OZ 2.0 data" rather than a fabricated
+# one. The columns are named so a lookup raises KeyError if the shape drifts.
+_EMPTY_OZ2 = pd.DataFrame(
+    {"oz2_nomination_eligible": [], "oz2_rural_area_qoz": [],
+     "oz2_inputs_missing": []},
+    index=pd.Index([], name="tract_id", dtype=object),
+)
+
+
 
 # ── live-verified vintage matrix (2026-07-17) ─────────────────────────────────
 # (street, vintage) -> 11-digit tract the live Census geocoder returns.
@@ -110,6 +122,7 @@ def _mapper_with(*eligible_tracts: str) -> NMTCMapper:
     m = NMTCMapper.__new__(NMTCMapper)
     m._table = _table(*eligible_tracts)
     m._oz_tracts = set()
+    m._oz2_table = _EMPTY_OZ2
     m.data_source = "test"
     return m
 

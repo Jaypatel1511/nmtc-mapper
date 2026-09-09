@@ -8,6 +8,7 @@ from nmtcmapper.exceptions import (
     EligibilityDataError, EligibilityDownloadError, EligibilityParseError,
     EligibilitySchemaError, EligibilityValueError,
     OZDataError, OZDownloadError, OZParseError,
+    OZ2DataError, OZ2DownloadError, OZ2ParseError, OZ2SchemaError,
     GeocoderError, GeocoderTransportError, AmbiguousAddressError,
 )
 
@@ -26,5 +27,9 @@ __all__ = [
     "EligibilityDataError", "EligibilityDownloadError", "EligibilityParseError",
     "EligibilitySchemaError", "EligibilityValueError",
     "OZDataError", "OZDownloadError", "OZParseError",
+    "OZ2DataError",
+    "OZ2DownloadError",
+    "OZ2ParseError",
+    "OZ2SchemaError",
     "GeocoderError", "GeocoderTransportError", "AmbiguousAddressError",
 ]
