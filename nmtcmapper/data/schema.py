@@ -450,6 +450,22 @@ DECIA_TERRITORY_NAMES = {
     "78": "US Virgin Islands",
 }
 
+# The public `eligibility_status` vocabulary, stated ONCE. Every prose copy of
+# this list — README, docs/, the mapper and checker docstrings — is bound to it
+# by tests/test_status_enumeration.py, and the two producers (the
+# EligibilityResult property and enrich_dataframe) are held to emit exactly
+# this set. 0.6.0 added `not-covered-territory` and the copies drifted; a
+# count word ("four outcomes") drifted with them. Order is the ladder order:
+# verdicts first, then the three INDETERMINATE statuses under which
+# nmtc_eligible is None and the four tri-state booleans are None.
+ELIGIBILITY_STATUS_VALUES = (
+    "verified-eligible",
+    "verified-ineligible",
+    "not-found",
+    "not-covered-territory",
+    "geocode-failed",
+)
+
 
 def derive_tract_scheme(geoids) -> str:
     """Classify a tract table's GEOID scheme from the table's OWN keys.

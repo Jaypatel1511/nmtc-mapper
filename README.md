@@ -11,7 +11,7 @@ using official CDFI Fund and Census Bureau data. No manual lookups required.
 (**indeterminate** — the address could not be geocoded, or the tract is absent
 from the ~85k-tract universe). `None` is **not** a falsy "ineligible": treating
 it as `False` fabricates a verified-ineligible answer. The additive
-`eligibility_status` column names the four outcomes explicitly —
+`eligibility_status` column names the five outcomes explicitly —
 `verified-eligible` / `verified-ineligible` / `not-found` /
 `not-covered-territory` / `geocode-failed`.
 
@@ -55,7 +55,8 @@ addresses and get results in seconds, using the same official data source.
     result.summary()
     print(result.nmtc_eligible)          # True / False / None (None = indeterminate)
     print(result.eligibility_status)     # "verified-eligible" | "verified-ineligible"
-                                         #  | "not-found" | "geocode-failed"
+                                         #  | "not-found" | "not-covered-territory"
+                                         #  | "geocode-failed"
     print(result.opportunity_zone_status)# "designated" | "not-confirmed" | "no-tract"
     print(result.distress_level)         # "deep" / "severe" / "lic" / "ineligible" / "unknown"
     print(result.poverty_rate)           # 0.38 — but see "Two kinds of missing" below
@@ -388,10 +389,10 @@ all — and removes nothing you passed in:
 | `eligibility_status` | `str` | `verified-eligible` / `verified-ineligible` / `not-found` / `not-covered-territory` / `geocode-failed` |
 
 The four `Optional[bool]` columns are `None` **exactly** when `eligibility_status`
-is `not-found` or `geocode-failed`. For a found tract their `False` is the CDFI
-Fund's published `NO` and is fully supportable. The frame is object-dtype, so
-filter with `df[col] != True` — **`~df[col]` raises `TypeError`** once any
-indeterminate row is present.
+is `not-found`, `not-covered-territory`, or `geocode-failed`. For a found tract
+their `False` is the CDFI Fund's published `NO` and is fully supportable. The
+frame is object-dtype, so filter with `df[col] != True` — **`~df[col]` raises
+`TypeError`** once any indeterminate row is present.
 
 **`is_opportunity_zone` is not among them, and never has been.** Batch callers get
 no OZ answer; single-address and single-tract callers do, via
@@ -407,8 +408,8 @@ raises `KeyError`; see [Known limitations](#known-limitations).
 `poverty_rate`, `ami_ratio` and `unemployment_rate` can be absent for **two
 different reasons**, and the distinction is part of the contract:
 
-- **`None`** — no row was read at all (`eligibility_status` is `not-found` or
-  `geocode-failed`).
+- **`None`** — no row was read at all (`eligibility_status` is `not-found`,
+  `not-covered-territory`, or `geocode-failed`).
 - **`NaN`** — a **found** tract whose metric the Fund published as `NA`: **1,583
   rows for poverty and 2,358 for AMI** on the live file. Those tracts still carry
   a real published YES/NO verdict; only the number is missing.

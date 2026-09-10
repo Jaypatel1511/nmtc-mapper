@@ -242,9 +242,9 @@ class NMTCMapper:
 
             Nine eligibility columns plus eligibility_status. The four
             Optional[bool] columns are None exactly when eligibility_status is
-            'not-found' or 'geocode-failed' — no row was read, so there is nothing
-            to report. Filter them with `!= True`, never `~col`: `~None` on an
-            object-dtype column raises TypeError.
+            'not-found', 'not-covered-territory' or 'geocode-failed' — no row was
+            read, so there is nothing to report. Filter them with `!= True`,
+            never `~col`: `~None` on an object-dtype column raises TypeError.
 
             is_opportunity_zone is NOT among them — it never has been. Batch
             callers get no OZ answer; single-address callers do. 0.5.0
@@ -294,7 +294,7 @@ class NMTCMapper:
         col = df["nmtc_eligible"]
         eligible = int((col == True).sum())
         ineligible = int((col == False).sum())
-        indeterminate = int(total - eligible - ineligible)  # None / not-found / geocode-failed
+        indeterminate = int(total - eligible - ineligible)  # None: not-found / not-covered-territory / geocode-failed
         determined = eligible + ineligible
         deep = int((df["distress_level"] == "deep").sum())
         severe = int((df["distress_level"] == "severe").sum())

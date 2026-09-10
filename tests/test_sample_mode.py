@@ -58,6 +58,14 @@ def _forbid_real_data_access(monkeypatch, tmp_path):
     unmocked load_oz2_table() survived the 0.6.0 build session's green run.
     Pointing the cache at an empty directory forces any unmocked loader to
     reach for the network, where the tripwire is waiting.
+
+    LIMIT: the tripwire is planted in `requests` (and, below, the stdlib
+    `urllib.request.urlopen`). It proves absence of a call THROUGH THOSE
+    TRANSPORTS only. A future loader that reaches for `httpx`, `aiohttp`, a raw
+    socket, or a subprocess walks past it silently — the claim "no network
+    call at all" is only as wide as this patch list. When a loader adopts a
+    new transport, add it HERE in the same change, or this docstring's claim
+    becomes the undeclared contract it exists to replace.
     """
     monkeypatch.setattr("nmtcmapper.data.loader.CACHE_DIR", str(tmp_path / "cold"))
 
@@ -69,6 +77,7 @@ def _forbid_real_data_access(monkeypatch, tmp_path):
     monkeypatch.setattr("requests.Session.request", _boom)
     monkeypatch.setattr("requests.get", _boom)
     monkeypatch.setattr("nmtcmapper.data.loader.requests.get", _boom)
+    monkeypatch.setattr("urllib.request.urlopen", _boom)
 
 
 def test_data_source_marker(monkeypatch, tmp_path):

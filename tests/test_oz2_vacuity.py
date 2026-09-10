@@ -22,7 +22,7 @@ import pathlib
 
 import pytest
 
-TARGETS = ["test_oz2.py", "test_live_oz2_file.py"]
+TARGETS = ["test_oz2.py", "test_live_oz2_file.py", "test_status_enumeration.py"]
 
 
 def _trees():
@@ -148,6 +148,7 @@ def test_every_looping_gate_actually_iterates():
     assertion) and this reddens.
     """
     from tests import test_oz2 as T
+    from tests import test_status_enumeration as S
 
     cases = {
         # gate -> the iterable it loops over, and the floor it must clear
@@ -155,6 +156,10 @@ def test_every_looping_gate_actually_iterates():
         "specimens": (T.SPECIMENS, 6),
         "published_figures": (T.OZ2_PUBLISHED_FIGURES, 20),
         "doc_files": (T._DOC_FILES, 2),
+        # FIX2: the eligibility_status statement sites. Five files state the
+        # vocabulary today; a site list that shrank would let a stale copy
+        # go ungated.
+        "status_statement_sites": (S._STATEMENT_SITES, 5),
     }
     for key, (iterable, floor) in cases.items():
         seen = sum(1 for _ in _Counting(key, iterable))
