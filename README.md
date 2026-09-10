@@ -12,7 +12,8 @@ using official CDFI Fund and Census Bureau data. No manual lookups required.
 from the ~85k-tract universe). `None` is **not** a falsy "ineligible": treating
 it as `False` fabricates a verified-ineligible answer. The additive
 `eligibility_status` column names the four outcomes explicitly —
-`verified-eligible` / `verified-ineligible` / `not-found` / `geocode-failed`.
+`verified-eligible` / `verified-ineligible` / `not-found` /
+`not-covered-territory` / `geocode-failed`.
 
 ---
 
@@ -384,7 +385,7 @@ all — and removes nothing you passed in:
 | `is_high_migration_rural` | `Optional[bool]` | `None` only when no row was read |
 | `severe_distress` | `Optional[bool]` | `None` only when no row was read |
 | `deep_distress` | `Optional[bool]` | `None` only when no row was read |
-| `eligibility_status` | `str` | `verified-eligible` / `verified-ineligible` / `not-found` / `geocode-failed` |
+| `eligibility_status` | `str` | `verified-eligible` / `verified-ineligible` / `not-found` / `not-covered-territory` / `geocode-failed` |
 
 The four `Optional[bool]` columns are `None` **exactly** when `eligibility_status`
 is `not-found` or `geocode-failed`. For a found tract their `False` is the CDFI
@@ -511,13 +512,14 @@ those changes must not move.
     # docs-check: skip shell command; the suite is run by CI, not by this gate
     PYTHONPATH=. pytest tests/ -v
 
-252 tests across all modules (including fail-loud, explicit-sample-mode,
+277 tests across all modules (including fail-loud, explicit-sample-mode,
 tri-state eligibility, fabricated-negative, null-sentinel-rendering,
 percentage-denominator, bool-coercion, exception-hierarchy-shape,
 cell-value-allowlist, async-batch, cache-poisoning, schema-drift, OZ 2.0
-answer-space, GEOID-scheme-discriminator and AST-vacuity coverage).
-25 of these are `@live` tests that hit the real CDFI Fund / Census / Treasury
-endpoints; CI deselects them with `-m "not live"`, leaving 227 offline.
+answer-space, GEOID-scheme-discriminator, DECIA-territory-coverage and
+AST-vacuity coverage).
+27 of these are `@live` tests that hit the real CDFI Fund / Census / Treasury
+endpoints; CI deselects them with `-m "not live"`, leaving 250 offline.
 
 ---
 

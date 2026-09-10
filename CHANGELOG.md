@@ -95,6 +95,55 @@ not break loudly.
 
 ### Fixed
 
+- **A territory tract was told "not found" when the truth is "not covered".**
+  For a GEOID in American Samoa (60), Guam (66), the Northern Mariana Islands
+  (69) or the US Virgin Islands (78), `summary()` rendered *"tract not in
+  eligibility table"* and *"Indeterminate — eligibility not verified (no match /
+  tract absent)"*. Every word is true in isolation and the composite
+  misdescribes the situation: both phrases describe a **lookup miss** — a table
+  that could have held the tract and didn't — and invite a retry with a
+  different vintage or a corrected id. There is nothing to retry. The loaded
+  NMTC LIC table is built on the **2016-2020 ACS**, whose universe is the 50
+  states + DC + Puerto Rico; the four DECIA territories were never candidates
+  for it. Measured against the live CDFI Fund file (85,395 rows), each of those
+  four state FIPS matches **zero** rows, while Puerto Rico matches **981**.
+
+  A fifth `eligibility_status` value, **`not-covered-territory`**, now separates
+  the structural boundary from the miss, and `summary()` prints the cause and
+  the remedy at the point of failure — naming the CDFI Fund's separate *"New
+  Markets Tax Credit Low-Income Community Census Tracts (2020 Island Areas
+  Decennial Census)"* file (last updated 2023-12-19) — the standard the
+  Connecticut refusal already met. Applied to **both** status ladders: the
+  `EligibilityResult` property and `enrich_dataframe`, which are independent and
+  would otherwise disagree about the same GEOID.
+
+  **Still indeterminate.** `nmtc_eligible` stays `None` and the other eight
+  fields stay `None`; only the *description* of the indeterminacy changed. No
+  `None` became a `False`. `distress_level` remains `"unknown"` — the new
+  description is selected from the status, deliberately **not** by adding a
+  `DISTRESS_LEVELS` entry, since a coverage boundary is not a distress finding
+  and would otherwise leak a non-distress value into every consumer that
+  switches on distress. Puerto Rico is **not** in the constant, and a test
+  asserts it: the set states which jurisdictions the loaded **file** covers, not
+  which FIPS look territorial. The Island Areas file is **not loaded** — that is
+  a data-source addition with its own vintage, column mapping, distress criteria
+  and audit, and is a 0.7.0 candidate. This release stops the misdescription; it
+  does not close the gap.
+
+- **A test documented as "mocked success" performed a real download.**
+  `tests/test_sample_mode.py::test_data_source_marker` mocked two of the three
+  loaders `NMTCMapper.__init__` calls; 0.6.0 added `load_oz2_table()` as the
+  third and the test went on "passing" by downloading Treasury's file for real —
+  invisible on a networked machine, an `OZ2DownloadError` offline. The third
+  loader is now mocked, and the test additionally asserts the **absence of the
+  behaviour rather than the presence of the mocks**: the transport is made to
+  raise, so a future fourth constructor dependency reddens this test when it is
+  added instead of when someone next runs the suite offline. The tripwire also
+  redirects the cache to an empty directory — without that it is
+  machine-dependent theatre, since a warm `~/.nmtcmapper` cache satisfies an
+  unmocked loader from disk and the transport is never touched. That is exactly
+  how the original defect survived a green run. No product code changed.
+
 - `license = {text = "MIT"}` replaced with the PEP 639 `license = "MIT"` plus
   `license-files`; build requirement raised to `setuptools>=77`. The old form is
   deprecated portfolio-wide with removal announced 2027-02-18. Verified rather
@@ -139,9 +188,39 @@ not break loudly.
   an unmeasured negative should switch on the status string.** Whether the value
   should instead be `None` is a decision for the methodology, not for a build.
 
-- The four DECIA territories (American Samoa, Guam, CNMI, USVI) have no row in
-  the CDFI Fund NMTC table at all, so their NMTC answer is `None` while their
-  OZ 2.0 answer is real — the one place OZ 2.0 is the more complete of the two.
+- **The four DECIA territories have no NMTC answer here, and now say so
+  precisely.** American Samoa (60), Guam (66), CNMI (69) and USVI (78) have no
+  row in the CDFI Fund NMTC table at all — measured, zero rows each — so their
+  NMTC answer is `None` while their OZ 2.0 answer is real; the one place OZ 2.0
+  is the more complete of the two. 133 such tracts exist in the OZ 2.0 universe
+  (AS 18, GU 57, MP 26, VI 32) and every one gets a real OZ 2.0 verdict. They
+  now report `eligibility_status == "not-covered-territory"` and `summary()`
+  names the remedy: territory LIC status is published in the CDFI Fund's
+  separate *"NMTC Low-Income Community Census Tracts (2020 Island Areas
+  Decennial Census)"* file (2023-12-19). **This package does not load that
+  file** — a 0.7.0 candidate, gated on its own vintage, mapping and audit
+  questions. Puerto Rico is *covered* (981 rows) and is deliberately excluded
+  from the territory constant.
+
+- **One deprecation warning, from a dependency, left visible on purpose.** The
+  suite emits exactly one warning on Python 3.14.6 / pandas 3.0.5:
+
+  > `pandas/core/internals/blocks.py:347: DeprecationWarning: Bitwise inversion
+  > '~' on bool is deprecated and will be removed in Python 3.16. This returns
+  > the bitwise inversion of the underlying int object and is usually not what
+  > you expect from negating a bool. Use the 'not' operator for boolean negation
+  > or ~int(x) if you really want the bitwise inversion of the underlying int.`
+
+  Raised from `tests/test_fabricated_negatives.py::test_the_documented_upgrade_filter_works`.
+  **The deprecated operation is pandas', not this package's**: `Series.__invert__`
+  (`generic.py:1495`) hands `operator.invert` to `BlockManager.apply`, which
+  applies it to each element of an object-dtype block — including a Python
+  `bool`. This package's own source performs no bitwise inversion anywhere; the
+  test uses the ordinary `~Series` API precisely to assert that it raises
+  `TypeError`, which is the upgrade note above. **Not suppressed, and no blanket
+  `filterwarnings` entry added.** A silenced third-party deprecation is how a
+  breaking dependency upgrade arrives without warning; it is recorded here
+  instead so the pandas/Python 3.16 interaction is tracked in the open.
 
 - The 25% per-State designation cap is **not modelled**. Treasury's arithmetic is
   **not verified** — `False` means "Treasury published 0", not "0 is correct".

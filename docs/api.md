@@ -31,7 +31,7 @@ ineligible`), not by `total`, and is `None` when `determined == 0`. The 0.4.3 ke
 | address | str | The address or tract id the check was made for |
 | tract_id | Optional[str] | 11-digit FIPS code (None if no tract resolved) |
 | nmtc_eligible | Optional[bool] | Tri-state: True / False / None (None = indeterminate, never falsy "ineligible") |
-| eligibility_status | str | verified-eligible / verified-ineligible / not-found / geocode-failed |
+| eligibility_status | str | verified-eligible / verified-ineligible / not-found / not-covered-territory / geocode-failed |
 | distress_level | str | deep / severe / lic / ineligible / unknown |
 | poverty_rate | Optional[float] | Tract poverty rate. **Two null states** — see below |
 | ami_ratio | Optional[float] | MFI/AMI ratio. **Two null states** — see below |

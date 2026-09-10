@@ -153,7 +153,7 @@ def test_every_looping_gate_actually_iterates():
         # gate -> the iterable it loops over, and the floor it must clear
         "g4_every_ct_prefix": (T.CT_LEGACY_COUNTY_PREFIXES, 8),
         "specimens": (T.SPECIMENS, 6),
-        "published_figures": (T.OZ2_PUBLISHED_FIGURES, 13),
+        "published_figures": (T.OZ2_PUBLISHED_FIGURES, 20),
         "doc_files": (T._DOC_FILES, 2),
     }
     for key, (iterable, floor) in cases.items():

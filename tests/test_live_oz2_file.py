@@ -196,3 +196,90 @@ def test_the_live_scheme_is_disjoint_from_the_nmtc_tables_in_connecticut(live_oz
     assert len(ct_oz2 & ct_nmtc) == 0
     # ...and identical at the six-digit tract-code level: a pure relabelling.
     assert {g[5:] for g in ct_oz2} == {g[5:] for g in ct_nmtc}
+
+
+def test_the_decia_coverage_boundary_is_measured_not_assumed(live_oz2):
+    """THE PREMISE OF `not-covered-territory`, re-derived from both live files.
+
+    The claim is not "one territory tract came back not-found" — that is an
+    anecdote consistent with a typo or a bad vintage. The claim is that the CDFI
+    Fund's NMTC LIC table (2016-2020 ACS: 50 states + DC + PR) contains ZERO
+    territory tracts while Treasury's OZ 2.0 universe contains 133 of them that
+    get real answers. Both halves are asserted here, against the bytes.
+
+    PUERTO RICO IS THE CONTROL. Without it a zero proves nothing about where the
+    boundary lies — a table that had dropped every non-state row would also
+    return four zeroes. 981 PR rows is what makes this a statement about the
+    2016-2020 ACS universe rather than about which FIPS look territorial.
+
+    MUTATION: add "72" to DECIA_TERRITORY_STATE_FIPS -> the PR assertions below
+    stay green (they read the tables, not the constant) but the offline gate
+    `test_puerto_rico_is_not_treated_as_a_not_covered_territory` reddens.
+    """
+    from nmtcmapper.data.loader import load_eligibility_table
+    from nmtcmapper.data.schema import (
+        DECIA_TERRITORY_STATE_FIPS, DECIA_TERRITORY_NAMES,
+    )
+    f = OZ2_PUBLISHED_FIGURES
+    nmtc = load_eligibility_table()
+    nmtc_idx = nmtc.index.astype(str)
+    oz2_idx = live_oz2.index.astype(str)
+
+    per_jurisdiction = {
+        "60": f["oz2_territory_as"], "66": f["oz2_territory_gu"],
+        "69": f["oz2_territory_mp"], "78": f["oz2_territory_vi"],
+    }
+    # The loop must actually run over all four — a shrunk constant would
+    # otherwise pass this gate having checked nothing.
+    assert DECIA_TERRITORY_STATE_FIPS == set(per_jurisdiction)
+    assert set(DECIA_TERRITORY_NAMES) == set(per_jurisdiction)
+
+    total = 0
+    for fips, expected in sorted(per_jurisdiction.items()):
+        name = DECIA_TERRITORY_NAMES[fips]
+        # (a) ZERO rows in the CDFI Fund NMTC table — the coverage boundary.
+        assert int(nmtc_idx.str.startswith(fips).sum()) == f["nmtc_territory_tracts"], name
+        # (b) a real, non-zero population in Treasury's OZ 2.0 universe.
+        n = int(oz2_idx.str.startswith(fips).sum())
+        assert n == expected, f"{name}: OZ 2.0 rows moved"
+        assert n > 0, name
+        total += n
+    assert total == f["oz2_territory_tracts"]
+
+    # THE CONTROL: Puerto Rico is covered by the very table the four are absent
+    # from, and is deliberately NOT in the territory constant.
+    assert int(nmtc_idx.str.startswith("72").sum()) == f["nmtc_pr_tracts"]
+    assert f["nmtc_pr_tracts"] > 0
+    assert "72" not in DECIA_TERRITORY_STATE_FIPS
+
+
+def test_live_territory_tracts_get_a_real_oz2_answer_and_no_nmtc_answer(live_oz2):
+    """The user-visible consequence, end to end on live data: the OZ 2.0 half
+    answers, the NMTC half says NOT COVERED — never "not found", never False.
+
+    This is the half of the finding that must NOT change: territory tracts get
+    correct OZ 2.0 verdicts today and this release does not touch that path.
+    """
+    from nmtcmapper.data.loader import load_eligibility_table
+    from nmtcmapper.mapper import NMTCMapper
+
+    m = NMTCMapper.from_sample()
+    m._table = load_eligibility_table()
+    m._oz2_table = live_oz2
+
+    seen = 0
+    for geoid in ("60010950100", "66010950100", "69085950100", "78010970100"):
+        if geoid not in live_oz2.index:
+            continue          # Treasury re-published; the gate above reports it
+        seen += 1
+        r = m.check_tract(geoid)
+        # NMTC half — not covered, and still INDETERMINATE.
+        assert r.eligibility_status == "not-covered-territory", geoid
+        assert r.nmtc_eligible is None, geoid
+        # OZ 2.0 half — a real answer, untouched by this release.
+        assert r.oz2_nomination_status in (
+            "eligible-for-nomination", "ineligible-on-treasury-inputs",
+            "ineligible-no-inputs-published",
+        ), geoid
+        assert r.is_oz2_nomination_eligible is not None, geoid
+    assert seen == 4, f"only {seen}/4 territory specimens present in the live file"

@@ -230,7 +230,7 @@ class NMTCMapper:
             - nmtc_eligible (Optional[bool]: True / False / None — None is
               INDETERMINATE, never a falsy "ineligible")
             - eligibility_status (str: 'verified-eligible', 'verified-ineligible',
-              'not-found', 'geocode-failed')
+              'not-found', 'not-covered-territory', 'geocode-failed')
             - distress_level (str: 'deep', 'severe', 'lic', 'ineligible', 'unknown')
             - poverty_rate (Optional[float])
             - ami_ratio (Optional[float])

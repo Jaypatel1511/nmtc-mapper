@@ -541,6 +541,18 @@ OZ2_PUBLISHED_FIGURES = {
     "oz2_ct_tracts":           884,   # Connecticut rows in Treasury's file
     "oz2_ct_eligible":         243,   # of those, eligible
     "nmtc_ct_tracts":          883,   # Connecticut rows in the CDFI Fund table
+    # The DECIA coverage boundary (0.6.0 hygiene). Territory tracts EXIST in
+    # Treasury's OZ 2.0 universe and get real answers; they have no row in the
+    # CDFI Fund's NMTC table at all. Both halves are gated live in
+    # test_live_oz2_file.py — the zero especially, because a coverage claim
+    # resting on one not-found specimen is an anecdote, not a measurement.
+    "oz2_territory_tracts":    133,   # AS+GU+MP+VI rows in Treasury's file
+    "oz2_territory_as":         18,   # American Samoa   (60)
+    "oz2_territory_gu":         57,   # Guam             (66)
+    "oz2_territory_mp":         26,   # N. Mariana Is.   (69)
+    "oz2_territory_vi":         32,   # US Virgin Is.    (78)
+    "nmtc_territory_tracts":     0,   # ALL FOUR, in the CDFI Fund table
+    "nmtc_pr_tracts":          981,   # Puerto Rico IS covered — why 72 is excluded
 }
 
 _DOC_FILES = ("README.md", "CHANGELOG.md")
@@ -586,6 +598,9 @@ def test_no_oz2_figure_is_hand_typed(filename):
     # Federal Register page for Connecticut's county-equivalent renumbering
     # (87 FR 34235) — a citation, and the only bare number here that is one.
     allowed |= {"2020", "2024", "2026", "2027", "2010", "2018", "2025", "1400",
+                # 2023: the CDFI Fund's Island Areas LIC file vintage
+                # (2023-12-19). A publication date, not a table count.
+                "2023",
                 "0.70", "45", "125", "34235",
                 # HTTP statuses in the exception-hierarchy diagram, and the
                 # statutory "fewer than 100 LICs" threshold for the 25-tract

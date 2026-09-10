@@ -3,7 +3,8 @@
 - EligibilityResult.summary() must render an indeterminate result distinctly and
   NEVER print "❌ NO" for it (the inline-qualifier house standard).
 - enrich_dataframe adds an additive ``eligibility_status`` column distinguishing
-  verified-eligible / verified-ineligible / not-found / geocode-failed.
+  verified-eligible / verified-ineligible / not-found / not-covered-territory /
+  geocode-failed.
 - eligible_count must not treat a None (indeterminate) verdict as an ineligible
   one — the None-as-falsy aggregate fabrication.
 """
@@ -58,7 +59,7 @@ def test_summary_eligible_says_yes(capsys):
     assert "✅ YES" in out
 
 
-# ── eligibility_status four-way ───────────────────────────────────────────────
+# ── eligibility_status five-way (0.6.0) ───────────────────────────────────────
 
 def test_eligibility_status_four_way():
     assert _result(nmtc_eligible=True, distress_level="lic").eligibility_status == "verified-eligible"

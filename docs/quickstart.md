@@ -33,7 +33,7 @@
 | Column | Type | Description |
 |--------|------|-------------|
 | nmtc_eligible | Optional[bool] | True (eligible) / False (verified ineligible) / None (indeterminate — never read None as "ineligible") |
-| eligibility_status | str | verified-eligible / verified-ineligible / not-found / geocode-failed |
+| eligibility_status | str | verified-eligible / verified-ineligible / not-found / not-covered-territory / geocode-failed |
 | distress_level | str | deep / severe / lic / ineligible / unknown (unknown = indeterminate) |
 | poverty_rate | Optional[float] | Census tract poverty rate. **Two null states** — see below |
 | ami_ratio | Optional[float] | MFI as pct of area median income. **Two null states** — see below |

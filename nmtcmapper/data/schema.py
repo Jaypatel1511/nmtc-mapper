@@ -412,6 +412,44 @@ CT_COG_COUNTY_PREFIXES = frozenset({
     "09190",
 })
 
+# ══════════════════════════════════════════════════════════════════════════════
+# DECIA territories — a COVERAGE BOUNDARY of the loaded table, not a lookup miss
+# ══════════════════════════════════════════════════════════════════════════════
+# The NMTC LIC eligibility table this package loads is built on the 2016-2020
+# ACS, whose universe is the 50 states + DC + PUERTO RICO. It does not extend to
+# the four DECIA territories below, which were never candidates for it. Measured
+# against the real CDFI Fund file (85,395 rows), each of these state FIPS matches
+# ZERO rows.
+#
+# These tracts are not hypothetical: probe_territories.py found 133 of them live
+# in the OZ 2.0 universe — American Samoa 18, Guam 57, Northern Mariana Islands
+# 26, US Virgin Islands 32 — and every one gets a real OZ 2.0 answer. Only the
+# NMTC half is uncoverable here.
+#
+# NMTC LIC status for these four IS published, in a SEPARATE CDFI Fund file:
+# "New Markets Tax Credit Low-Income Community Census Tracts (2020 Island Areas
+# Decennial Census)", last updated 2023-12-19, at
+# https://www.cdfifund.gov/documents/geographic-reports
+# This package DOES NOT LOAD that file. The point of this constant is to say so
+# at the point of failure instead of reporting a structural non-coverage as a
+# failed lookup — the same standard the Connecticut refusal above already meets.
+#
+# PUERTO RICO (72) IS DELIBERATELY NOT IN THIS SET. "Territory" naturally reads
+# as including PR, and that reading is exactly wrong here: PR contributes 981
+# rows to the loaded table, so a PR tract that misses IS a genuine lookup miss
+# and must keep reporting "not-found". This set is a statement about which
+# jurisdictions the loaded FILE covers, not about which FIPS look territorial.
+DECIA_TERRITORY_STATE_FIPS = frozenset({"60", "66", "69", "78"})
+
+# Jurisdiction names, so the output names the place the way the Connecticut
+# refusal names Connecticut, rather than printing a two-digit code at a user.
+DECIA_TERRITORY_NAMES = {
+    "60": "American Samoa",
+    "66": "Guam",
+    "69": "Northern Mariana Islands",
+    "78": "US Virgin Islands",
+}
+
 
 def derive_tract_scheme(geoids) -> str:
     """Classify a tract table's GEOID scheme from the table's OWN keys.

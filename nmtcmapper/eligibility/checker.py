@@ -5,7 +5,30 @@ from dataclasses import dataclass
 from typing import Optional
 import pandas as pd
 
-from nmtcmapper.data.schema import DISTRESS_LEVELS, CT_LEGACY_COUNTY_PREFIXES
+from nmtcmapper.data.schema import (
+    DISTRESS_LEVELS, CT_LEGACY_COUNTY_PREFIXES,
+    DECIA_TERRITORY_STATE_FIPS, DECIA_TERRITORY_NAMES,
+)
+
+# The "not covered" block, rendered once and shared by both status ladders so
+# the wording cannot drift between check_address() and enrich_dataframe().
+NOT_COVERED_DESCRIPTION = (
+    "Not covered — outside this table's universe, NOT a lookup miss"
+)
+
+
+def _decia_territory_name(tract_id) -> Optional[str]:
+    """The jurisdiction name when a GEOID is in a DECIA territory, else None.
+
+    Keyed on the state FIPS prefix. Puerto Rico (72) deliberately returns None:
+    PR IS in the loaded table's universe, so a PR miss is a real lookup miss.
+    """
+    if tract_id is None:
+        return None
+    fips = str(tract_id)[:2]
+    if fips in DECIA_TERRITORY_STATE_FIPS:
+        return DECIA_TERRITORY_NAMES[fips]
+    return None
 
 
 def _tri(value: Optional[bool]) -> str:
@@ -264,13 +287,26 @@ class EligibilityResult:
 
     @property
     def eligibility_status(self) -> str:
-        """Four-way status distinguishing the indeterminate cases from verdicts.
+        """Five-way status distinguishing the indeterminate cases from verdicts.
 
-        verified-eligible / verified-ineligible / not-found / geocode-failed.
+        verified-eligible / verified-ineligible / not-found /
+        not-covered-territory / geocode-failed.
+
+        ``not-covered-territory`` (0.6.0) separates a STRUCTURAL non-coverage
+        from a lookup miss: the four DECIA territories are outside the loaded
+        2016-2020 ACS table's universe entirely, so "not found in the table" is
+        a true statement that misdescribes the situation — there is no retry
+        that helps, the remedy is a different file. See
+        ``DECIA_TERRITORY_STATE_FIPS``. Both remain INDETERMINATE:
+        ``nmtc_eligible`` is None in either case, never False.
         """
         if not self.geocode_success:
             return "geocode-failed"
         if not self.tract_found:
+            # Order matters: after geocode-failed (a territory tract that never
+            # geocoded must report the geocode failure), before the generic miss.
+            if _decia_territory_name(self.tract_id):
+                return "not-covered-territory"
             return "not-found"
         # Guard None FIRST, exactly as summary() does: an indeterminate verdict
         # must never fall through the falsy branch and surface as a fabricated
@@ -286,7 +322,27 @@ class EligibilityResult:
         print(f"  Census Tract:     {self.tract_id or 'Not found'}")
         # Tri-state: an indeterminate result must NOT print "❌ NO". The reason it
         # is unknown is qualified inline on the same line (not in a footer).
-        if self.nmtc_eligible is None:
+        # Selected from eligibility_status, not from distress_level: a coverage
+        # boundary is not a distress finding, and adding a DISTRESS_LEVELS entry
+        # for it would push a non-distress value into every consumer that
+        # switches on distress. distress_level stays "unknown".
+        status = self.eligibility_status
+        description = self.distress_description
+        if status == "not-covered-territory":
+            territory = _decia_territory_name(self.tract_id)
+            elig = (
+                # Wrapped so the FILE NAME survives on one line — a user has to
+                # be able to copy it out and search for it; that name is the
+                # entire remedy this block exists to deliver.
+                f"🚫 NOT COVERED — {territory} is outside the 2016-2020 ACS\n"
+                "                    NMTC LIC table this package loads (50 states + DC + PR).\n"
+                "                    Territory LIC status is published separately, in the CDFI\n"
+                "                    Fund's \"NMTC Low-Income Community Census Tracts\n"
+                "                    (2020 Island Areas Decennial Census)\" file. This package\n"
+                "                    does not load it."
+            )
+            description = NOT_COVERED_DESCRIPTION
+        elif self.nmtc_eligible is None:
             if not self.geocode_success:
                 elig = "❓ UNKNOWN — address could not be geocoded (indeterminate, NOT ineligible)"
             else:
@@ -297,7 +353,7 @@ class EligibilityResult:
             elig = "❌ NO"
         print(f"  NMTC Eligible:    {elig}")
         print(f"  Distress Level:   {self.distress_level.upper()}")
-        print(f"  Description:      {self.distress_description}")
+        print(f"  Description:      {description}")
         # Three-branch switch via _pct(), printed unconditionally — see _pct's
         # docstring. `is not None` was the wrong sentinel: the loader's None
         # becomes NaN inside the DataFrame, NaN is not None, and 1,583 poverty /
@@ -464,8 +520,10 @@ def enrich_dataframe(
 
     for col in eligibility_cols:
         df[col] = None
-    # Additive column (0.4.0) distinguishing the four outcomes:
-    # verified-eligible / verified-ineligible / not-found / geocode-failed.
+    # Additive column (0.4.0; a fifth value added in 0.6.0) distinguishing
+    # the outcomes:
+    # verified-eligible / verified-ineligible / not-found /
+    # not-covered-territory / geocode-failed.
     df["eligibility_status"] = None
 
     for idx, row in df.iterrows():
@@ -483,7 +541,14 @@ def enrich_dataframe(
         for col, val in result.items():
             df.at[idx, col] = val
         if not found:
-            df.at[idx, "eligibility_status"] = "not-found"
+            # SECOND, INDEPENDENT status ladder — it must stay in lockstep with
+            # EligibilityResult.eligibility_status. Fixing only the property
+            # would make check_address() say not-covered-territory while this
+            # path said not-found for the same GEOID.
+            df.at[idx, "eligibility_status"] = (
+                "not-covered-territory" if _decia_territory_name(tract_id)
+                else "not-found"
+            )
         elif result["nmtc_eligible"]:
             df.at[idx, "eligibility_status"] = "verified-eligible"
         else:
