@@ -2,7 +2,7 @@
 
 All notable changes to nmtc-mapper are documented here.
 
-## [0.6.0] — unreleased
+## [0.6.0] — 2026-09-11
 
 **The OZ 2.0 restoration.** `docs/oz2-methodology.md` was written 2026-08-05 as a
 complete pre-implementation decision document and 0.5.0 shipped none of it. This
