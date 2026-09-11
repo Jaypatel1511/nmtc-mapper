@@ -153,6 +153,7 @@ def test_the_build_version_is_read_from_pyproject():
     assert len(v) == 3 and v > (0, 0, 0)
 
 
+@pytest.mark.repo  # docs/*.md are not in the release jobs' run directory
 def test_no_shipped_doc_promises_the_version_being_built():
     """MUTATION: put "until **<build version>** normalizes it" back into the
     README's Known limitations -> red here, naming README.md.
@@ -177,6 +178,7 @@ def test_no_shipped_doc_promises_the_version_being_built():
         f"\n  - " + "\n  - ".join(due))
 
 
+@pytest.mark.repo  # same: floors _doc_pages(), which reads docs/*.md
 def test_the_scan_actually_read_versions_somewhere():
     """(j4) a detector that matched no version at all would pass every page."""
     total = sum(len(_VERSION.findall((p).read_text(encoding="utf-8")))

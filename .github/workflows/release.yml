@@ -314,13 +314,25 @@ jobs:
           mkdir -p "${TESTDIR}"
           cp -R tests "${TESTDIR}/tests"
           # Same reason as test-sdist: [tool.pytest.ini_options] registers the
-          # `live` marker, and without the ini file in the run directory this
-          # job also emitted PytestUnknownMarkWarning. tests/ already comes from
-          # the checkout in this job, so taking pyproject.toml from it too
-          # changes nothing about what is under test -- the WHEEL still supplies
-          # the package, which is what the origin assertion above pins down.
+          # `live` and `repo` markers, and without the ini file in the run
+          # directory this job also emitted PytestUnknownMarkWarning. tests/
+          # already comes from the checkout in this job, so taking
+          # pyproject.toml from it too changes nothing about what is under test
+          # -- the WHEEL still supplies the package, which is what the origin
+          # assertion above pins down.
           cp pyproject.toml "${TESTDIR}/pyproject.toml"
           cp README.md "${TESTDIR}/README.md"
+          # And NOTHING else. Not docs/, not tools/, not CHANGELOG.md, not the
+          # source tree. Run #9 for 0.6.0 failed every matrix job here because
+          # five gates read exactly those paths through
+          # Path(__file__).resolve().parent.parent -- assertions about the
+          # REPOSITORY that mean nothing against an installed wheel. The fix was
+          # to mark them `repo` (pyproject.toml) and deselect them below, NOT
+          # to copy the files in: copying nmtcmapper/*.py here so a docs gate
+          # can read it would make this job test the checkout again.
+          # tests/test_repo_marker.py pins the marked set in both directions
+          # (it runs here too), and scripts/repro-wheel-tests.sh reproduces
+          # this exact directory locally, which is the pre-tag check.
           cd "${TESTDIR}"
 
           # Assert the import really came from the installed wheel. Without
@@ -343,7 +355,7 @@ jobs:
             exit 1
           fi
 
-          "${VPY}" -m pytest tests -v --tb=short -m "not live" --import-mode=importlib --strict-markers
+          "${VPY}" -m pytest tests -v --tb=short -m "not live and not repo" --import-mode=importlib --strict-markers
 
   # ── 4. Test the built SDIST, running the suite THAT SHIPPED INSIDE IT ─────
   #
@@ -411,11 +423,16 @@ jobs:
           cp "${SRC}/README.md" "${TESTDIR}/README.md"
           # pyproject.toml comes along FROM THE TARBALL (not the repo -- this job
           # still has no checkout) because it carries [tool.pytest.ini_options],
-          # where the `live` marker is registered. Without it pytest finds no ini
-          # file here, the registration never applies, and the run emitted
-          # PytestUnknownMarkWarning while still passing. That is a latent break:
-          # the marker is what `-m "not live"` deselects on, so --strict-markers
-          # turns the warning into a collection ERROR. Verified both ways.
+          # where the `live` and `repo` markers are registered. Without it
+          # pytest finds no ini file here, the registration never applies, and
+          # the run emitted PytestUnknownMarkWarning while still passing. That
+          # is a latent break: the markers are what `-m "not live and not repo"`
+          # deselects on, so --strict-markers turns the warning into a
+          # collection ERROR. Verified both ways.
+          # The tarball also ships tools/, CHANGELOG.md and docs/README.expected,
+          # and they are deliberately NOT copied here: the `repo` gates that
+          # read them are assertions about the repository, deselected below.
+          # See the matching note in test-wheel.
           cp "${SRC}/pyproject.toml" "${TESTDIR}/pyproject.toml"
           cd "${TESTDIR}"
 
@@ -438,7 +455,7 @@ jobs:
           # loudly instead of silently deselecting nothing.
           # --junitxml so the NEXT step can count what actually executed. The
           # module-count check alone cannot: see the note there.
-          "${VPY}" -m pytest tests -m "not live" --import-mode=importlib --strict-markers \
+          "${VPY}" -m pytest tests -m "not live and not repo" --import-mode=importlib --strict-markers \
             --junitxml="${RUNNER_TEMP}/sdist-junit.xml"
 
       - name: Assert the sdist suite is not silently truncated
@@ -472,8 +489,9 @@ jobs:
           # is deselected exits 0 while shipping every module it should.
           #   2 skipped in 0.00s     -> pytest exit code 0
           #   1 deselected in 0.00s  -> pytest exit code 0
-          # This job passes `-m "not live"`, so it is directly exposed: widen
-          # that expression, or re-mark the suite `live`, and every test is
+          # This job passes `-m "not live and not repo"`, so it is directly
+          # exposed: widen that expression, or re-mark the suite `live`/`repo`
+          # (tests/test_repo_marker.py pins the `repo` set exactly), and every test is
           # deselected while the module count stays untouched and every gate
           # stays green. That is the same vacuity class as an empty parametrize,
           # at job scale -- see empty_parameter_set_mark in pyproject.toml for

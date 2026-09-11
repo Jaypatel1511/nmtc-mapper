@@ -518,15 +518,24 @@ those changes must not move.
     # docs-check: skip shell command; the suite is run by CI, not by this gate
     PYTHONPATH=. pytest tests/ -v
 
-355 tests across all modules (including fail-loud, explicit-sample-mode,
+366 tests across all modules (including fail-loud, explicit-sample-mode,
 tri-state eligibility, fabricated-negative, null-sentinel-rendering,
 percentage-denominator, bool-coercion, exception-hierarchy-shape,
 cell-value-allowlist, async-batch, cache-poisoning, schema-drift, OZ 2.0
 answer-space, GEOID-scheme-discriminator, DECIA-territory-coverage,
-malformed-GEOID-shape, forward-version-promise, docs-check-tool and
-AST-vacuity coverage).
+malformed-GEOID-shape, forward-version-promise, docs-check-tool,
+repo-marker-pinning and AST-vacuity coverage).
 28 of these are `@live` tests that hit the real CDFI Fund / Census / Treasury
-endpoints; CI deselects them with `-m "not live"`, leaving 327 offline.
+endpoints; CI deselects them with `-m "not live"`, leaving 338 offline.
+40 of the offline tests are `@repo` gates that read the repository itself
+(`docs/`, `tools/`, `CHANGELOG.md`, the source tree) and mean nothing against
+an installed artifact; the release pipeline's wheel and sdist jobs run the
+suite from a directory holding only `tests/`, `pyproject.toml` and `README.md`
+and deselect them with `-m "not live and not repo"`. Run the suite that way
+yourself from outside a checkout — for instance from an unpacked sdist:
+
+    # docs-check: skip shell command; needs an installed wheel and a clean directory
+    pytest tests -m "not live and not repo" --import-mode=importlib --strict-markers
 
 ---
 

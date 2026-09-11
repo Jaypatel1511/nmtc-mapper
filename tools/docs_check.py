@@ -730,6 +730,9 @@ def check_all_documented(
 #   * total   -- `pytest tests --collect-only -q`
 #   * live    -- the same, plus `-m <marker>`
 #   * offline -- the same, plus `-m "not <marker>"`
+#   * repo    -- the same, plus `-m <repo_marker>` (FIX5: the gates that read
+#                the repository and are deselected in release.yml's packaged
+#                layouts; a subset of offline, so it takes part in no sum)
 #
 # Each claimed number is checked against its own collection, and the README's
 # three STATED numbers are cross-checked against one another (offline + live
@@ -759,6 +762,7 @@ TEST_COUNT_CLAIMS = (
     ("claim_pattern", "readme-test-count", "total", None),
     ("live_claim_pattern", "readme-test-count-live", "live", "{marker}"),
     ("offline_claim_pattern", "readme-test-count-offline", "offline", "not {marker}"),
+    ("repo_claim_pattern", "readme-test-count-repo", "repo", "{repo_marker}"),
 )
 
 
@@ -801,6 +805,7 @@ def check_test_count(
     root: Path, readme: str, tests_path: str, tests_cfg: Dict[str, Any], report: Report
 ) -> None:
     marker = tests_cfg.get("live_marker", "live")
+    repo_marker = tests_cfg.get("repo_marker", "repo")
 
     # ---- read the claims ---------------------------------------------
     claimed: Dict[str, int] = {}
@@ -853,7 +858,8 @@ def check_test_count(
     for key, fid, what, marker_tmpl in TEST_COUNT_CLAIMS:
         if what not in claimed:
             continue
-        expr = marker_tmpl.format(marker=marker) if marker_tmpl else None
+        expr = (marker_tmpl.format(marker=marker, repo_marker=repo_marker)
+                if marker_tmpl else None)
         count, tail, rc = _collect_count(root, tests_path, expr)
         if rc not in _COLLECT_OK_EXIT:
             # A parseable count out of a broken run is the trap: "302 tests

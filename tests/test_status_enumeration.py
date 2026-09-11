@@ -289,6 +289,7 @@ def test_the_biconditional_holds_on_every_status(sample_table):
 
 # ── 2. every statement site names every value ─────────────────────────────────
 
+@pytest.mark.repo  # _STATEMENT_SITES reaches docs/ and nmtcmapper/*.py -- not in the release jobs' run directory
 @pytest.mark.parametrize("site", _STATEMENT_SITES)
 def test_every_statement_site_names_every_value(site):
     """MUTATION: delete `not-covered-territory` from README.md's opening list
@@ -299,6 +300,7 @@ def test_every_statement_site_names_every_value(site):
     assert not missing, f"{site} never states {missing}"
 
 
+@pytest.mark.repo  # _STATEMENT_SITES reaches docs/ and nmtcmapper/*.py -- not in the release jobs' run directory
 @pytest.mark.parametrize("site", _STATEMENT_SITES)
 def test_the_enumeration_is_stated_in_full_somewhere_in_each_site(
         site, sample_table):
@@ -333,6 +335,7 @@ def test_the_enumeration_is_stated_in_full_somewhere_in_each_site(
     assert not partial, f"{site}: stale partial enumeration(s): {partial}"
 
 
+@pytest.mark.repo  # _STATEMENT_SITES reaches docs/ and nmtcmapper/*.py -- not in the release jobs' run directory
 @pytest.mark.parametrize("site", _STATEMENT_SITES)
 def test_no_count_word_beside_the_enumeration_disagrees_with_it(site):
     """"names the four outcomes explicitly — a / b / c / d / e". The count word
@@ -365,6 +368,7 @@ def test_no_count_word_beside_the_enumeration_disagrees_with_it(site):
 
 # ── 3. the indeterminate contract names every indeterminate status ────────────
 
+@pytest.mark.repo  # _STATEMENT_SITES reaches docs/ and nmtcmapper/*.py -- not in the release jobs' run directory
 @pytest.mark.parametrize("site", _STATEMENT_SITES)
 def test_every_none_contract_paragraph_names_every_indeterminate_status(
         site, sample_table):
@@ -422,6 +426,7 @@ def test_the_readme_documents_the_exported_vocabulary_beside_the_enumeration():
     assert sum(v in window for v in ELIGIBILITY_STATUS_VALUES) >= 3
 
 
+@pytest.mark.repo  # CHANGELOG.md
 def test_upgrading_names_the_additive_status_and_the_corrected_membership_test():
     """`not-covered-territory` is an ADDITIVE PUBLIC ENUM VALUE. A consumer
     holding `status in {"not-found", "geocode-failed"}` gets False for a

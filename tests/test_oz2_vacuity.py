@@ -172,6 +172,7 @@ def test_every_looping_gate_actually_iterates():
         assert _ITERATIONS[key] == seen
 
 
+@pytest.mark.repo  # reads CHANGELOG.md via T._DOC_FILES
 def test_the_prose_gates_actually_found_oz2_paragraphs_to_check():
     """The prose gates loop over `_oz2_paragraphs(...)`. If that returned an
     empty list — a README that stopped mentioning OZ 2.0, a renamed heading —
@@ -189,6 +190,7 @@ def test_the_prose_gates_actually_found_oz2_paragraphs_to_check():
         )
 
 
+@pytest.mark.repo  # reads CHANGELOG.md via T._DOC_FILES
 def test_the_figure_gate_actually_examined_some_figures():
     """`test_no_oz2_figure_is_hand_typed` builds an offender list and asserts it
     is empty — vacuously true if it never matched a number at all."""

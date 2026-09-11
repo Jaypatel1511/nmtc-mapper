@@ -45,6 +45,13 @@ live_claim_pattern = '^(\d+) of these are `@live` tests\b'
 offline_claim_pattern = '\bleaving (\d+) offline\b'
 # The pytest marker the live/offline split is made on (pyproject [tool.pytest]).
 live_marker = "live"
+# repo    -- "40 of the offline tests are `@repo` gates ..."; collected with
+#            `-m repo`. FIX5: these read docs/, tools/, CHANGELOG.md or the
+#            source tree and are deselected by release.yml's packaged-layout
+#            jobs. A subset of offline, so it joins no sum; it is a fourth
+#            stated number, and a stated number is a claim.
+repo_claim_pattern = '^(\d+) of the offline tests are `@repo` gates\b'
+repo_marker = "repo"
 
 [denylist]
 file = "docs-check-denylist.txt"

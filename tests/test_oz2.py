@@ -574,6 +574,7 @@ def _oz2_paragraphs(text):
     return [b for b in re.split(r"\n\s*\n", text) if _OZ2_MARKERS.search(b)]
 
 
+@pytest.mark.repo  # _DOC_FILES includes CHANGELOG.md, absent from the release jobs' run directory
 @pytest.mark.parametrize("filename", _DOC_FILES)
 def test_no_oz2_figure_is_hand_typed(filename):
     """(j1) Every 4-or-5-digit figure in an OZ 2.0 paragraph of the README or the
@@ -623,6 +624,7 @@ def test_no_oz2_figure_is_hand_typed(filename):
     )
 
 
+@pytest.mark.repo  # CHANGELOG.md
 @pytest.mark.parametrize("filename", _DOC_FILES)
 def test_oz2_prose_never_calls_an_eligible_tract_designated(filename):
     """(j2) No tract is designated and none can be before late 2026. The prose
@@ -646,6 +648,7 @@ def test_oz2_prose_never_calls_an_eligible_tract_designated(filename):
         assert not hits, f"{filename} asserts a 2027 designation: {hits}"
 
 
+@pytest.mark.repo  # CHANGELOG.md
 @pytest.mark.parametrize("filename", _DOC_FILES)
 def test_oz2_prose_does_not_say_the_window_closes_in_september(filename):
     """(j3) §1400Z-1(b)(2) survives OBBBA: a State CEO may request a 30-day
@@ -668,6 +671,7 @@ def test_oz2_prose_does_not_say_the_window_closes_in_september(filename):
         )
 
 
+@pytest.mark.repo  # globs nmtcmapper/**/*.py from the checkout and reads CHANGELOG.md
 def test_the_retired_nmtc_vocabulary_never_appears():
     """The current NMTC round runs on Severe Distress / Deep Distress with
     quantified commitments, NOT 'Areas of Higher Distress'. Gated across the
@@ -705,6 +709,7 @@ def test_the_retired_nmtc_vocabulary_never_appears():
     assert not offenders, f"retired NMTC vocabulary: {offenders}"
 
 
+@pytest.mark.repo  # CHANGELOG.md
 def test_column_two_is_never_called_the_lic_column_without_its_qualifier():
     """Column 2 was renamed upstream to '...on Poverty or Income Criteria OR HIGH
     MIGRATION RURAL Census Tract?' — a SEMANTIC rename. Prose calling it 'the LIC
