@@ -513,14 +513,14 @@ those changes must not move.
     # docs-check: skip shell command; the suite is run by CI, not by this gate
     PYTHONPATH=. pytest tests/ -v
 
-277 tests across all modules (including fail-loud, explicit-sample-mode,
+302 tests across all modules (including fail-loud, explicit-sample-mode,
 tri-state eligibility, fabricated-negative, null-sentinel-rendering,
 percentage-denominator, bool-coercion, exception-hierarchy-shape,
 cell-value-allowlist, async-batch, cache-poisoning, schema-drift, OZ 2.0
 answer-space, GEOID-scheme-discriminator, DECIA-territory-coverage and
 AST-vacuity coverage).
 27 of these are `@live` tests that hit the real CDFI Fund / Census / Treasury
-endpoints; CI deselects them with `-m "not live"`, leaving 250 offline.
+endpoints; CI deselects them with `-m "not live"`, leaving 275 offline.
 
 ---
 
