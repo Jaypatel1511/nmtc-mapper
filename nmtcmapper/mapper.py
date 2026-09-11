@@ -7,7 +7,9 @@ from typing import Optional
 from nmtcmapper.data.loader import (
     load_eligibility_table, load_opportunity_zones,
     load_sample_table, _sample_oz_tracts,
+    load_oz2_table, _sample_oz2_table,
 )
+from nmtcmapper.data.schema import CT_LEGACY_COUNTY_PREFIXES
 from nmtcmapper.geocoder.census import geocode_address, geocode_batch
 from nmtcmapper.eligibility.checker import (
     check_tract, enrich_dataframe, EligibilityResult
@@ -28,6 +30,39 @@ def _oz_status(tract_id: str, oz_tracts: set) -> Optional[bool]:
     non-designation are THE SAME OBSERVATION without a crosswalk.
     """
     return True if tract_id in oz_tracts else None
+
+
+def _oz2_flags(tract_id: str, oz2_table) -> dict:
+    """The two OZ 2.0 flags plus their provenance, for one GEOID (0.6.0).
+
+    All three are ``None`` when the GEOID is a Connecticut LEGACY county key.
+    That is a REFUSAL, not a miss: Treasury keys Connecticut on COG/planning
+    regions (09110-09190) and this package's NMTC table keys it on legacy
+    counties (09001-09015). The two schemes share ZERO GEOIDs, so a legacy CT key
+    is guaranteed absent from Treasury's file — and returning the resulting
+    ``None`` without saying why would report an entire state as merely unknown.
+    The refusal is checked BEFORE the lookup so it cannot be confused with one,
+    and it is surfaced by ``oz2_nomination_status``.
+    """
+    if tract_id is None or str(tract_id)[:5] in CT_LEGACY_COUNTY_PREFIXES:
+        return {"is_oz2_nomination_eligible": None,
+                "is_rural_area_qoz_eligible": None,
+                "oz2_inputs_missing": None}
+    if tract_id not in oz2_table.index:
+        # Absent from the 85,529-row universe. Treasury's file is a FULL universe
+        # with an explicit 0/1, so a row that exists yields a real False — but a
+        # tract with no row at all was never scored, and None is the only honest
+        # answer. Absence is never a negative here.
+        return {"is_oz2_nomination_eligible": None,
+                "is_rural_area_qoz_eligible": None,
+                "oz2_inputs_missing": None}
+    row = oz2_table.loc[tract_id]
+    rural = row["oz2_rural_area_qoz"]
+    return {
+        "is_oz2_nomination_eligible": bool(row["oz2_nomination_eligible"]),
+        "is_rural_area_qoz_eligible": None if rural is None else bool(rural),
+        "oz2_inputs_missing": bool(row["oz2_inputs_missing"]),
+    }
 
 
 class NMTCMapper:
@@ -66,6 +101,9 @@ class NMTCMapper:
         print(f"Ready. {len(self._table):,} census tracts loaded.")
         self._oz_tracts = load_opportunity_zones()
         print(f"Opportunity Zones loaded: {len(self._oz_tracts):,} tracts")
+        # A SECOND TABLE ON A SECOND SCHEME, held separately and never merged
+        # with self._table. See docs/oz2-methodology.md §2.
+        self._oz2_table = load_oz2_table()
         self.data_source = "cdfi_fund"
 
     @classmethod
@@ -81,13 +119,15 @@ class NMTCMapper:
         obj = cls.__new__(cls)
         obj._table = load_sample_table()
         obj._oz_tracts = _sample_oz_tracts()
+        obj._oz2_table = _sample_oz2_table()
         obj.data_source = "sample"
         return obj
 
     def __repr__(self) -> str:
         return (
             f"NMTCMapper(data_source={self.data_source!r}, "
-            f"tracts={len(self._table):,}, oz_tracts={len(self._oz_tracts):,})"
+            f"tracts={len(self._table):,}, oz_tracts={len(self._oz_tracts):,}, "
+            f"oz2_tracts={len(self._oz2_table):,})"
         )
 
     def check_address(self, address: str) -> EligibilityResult:
@@ -131,10 +171,14 @@ class NMTCMapper:
                 severe_distress=None,
                 deep_distress=None,
                 is_opportunity_zone=None,
+                is_oz2_nomination_eligible=None,
+                is_rural_area_qoz_eligible=None,
+                oz2_inputs_missing=None,
             )
 
         data = check_tract(tract_id, self._table)
         data["is_opportunity_zone"] = _oz_status(tract_id, self._oz_tracts)
+        data.update(_oz2_flags(tract_id, self._oz2_table))
         return EligibilityResult(
             address=address,
             tract_id=tract_id,
@@ -154,6 +198,7 @@ class NMTCMapper:
         """
         data = check_tract(tract_id, self._table)
         data["is_opportunity_zone"] = _oz_status(tract_id, self._oz_tracts)
+        data.update(_oz2_flags(tract_id, self._oz2_table))
         return EligibilityResult(
             address=f"Census Tract {tract_id}",
             tract_id=tract_id,
@@ -185,7 +230,7 @@ class NMTCMapper:
             - nmtc_eligible (Optional[bool]: True / False / None — None is
               INDETERMINATE, never a falsy "ineligible")
             - eligibility_status (str: 'verified-eligible', 'verified-ineligible',
-              'not-found', 'geocode-failed')
+              'not-found', 'not-covered-territory', 'geocode-failed')
             - distress_level (str: 'deep', 'severe', 'lic', 'ineligible', 'unknown')
             - poverty_rate (Optional[float])
             - ami_ratio (Optional[float])
@@ -197,9 +242,9 @@ class NMTCMapper:
 
             Nine eligibility columns plus eligibility_status. The four
             Optional[bool] columns are None exactly when eligibility_status is
-            'not-found' or 'geocode-failed' — no row was read, so there is nothing
-            to report. Filter them with `!= True`, never `~col`: `~None` on an
-            object-dtype column raises TypeError.
+            'not-found', 'not-covered-territory' or 'geocode-failed' — no row was
+            read, so there is nothing to report. Filter them with `!= True`,
+            never `~col`: `~None` on an object-dtype column raises TypeError.
 
             is_opportunity_zone is NOT among them — it never has been. Batch
             callers get no OZ answer; single-address callers do. 0.5.0
@@ -249,7 +294,7 @@ class NMTCMapper:
         col = df["nmtc_eligible"]
         eligible = int((col == True).sum())
         ineligible = int((col == False).sum())
-        indeterminate = int(total - eligible - ineligible)  # None / not-found / geocode-failed
+        indeterminate = int(total - eligible - ineligible)  # None: not-found / not-covered-territory / geocode-failed
         determined = eligible + ineligible
         deep = int((df["distress_level"] == "deep").sum())
         severe = int((df["distress_level"] == "severe").sum())

@@ -30,9 +30,21 @@ dir = "docs/README.expected"
 
 [tests]
 path = "tests"
-# Matches a line like "114 tests across all modules ...". If the README makes no
-# such claim the assertion is skipped -- but if it makes one, it must be true.
+# One pattern per number the README states; group(1) is the number. The rule:
+# a key that is PRESENT must match the README, and a present key that matches
+# nothing FAILS -- the claim moved and the gate lost it. A key that is ABSENT
+# is the statement "this README makes no such claim", and only that skips.
+# (Until 0.6.0 only the first was read; the other two drifted for a release
+# with the gate green.)
+#
+# total   -- "302 tests across all modules ..."
 claim_pattern = '^(\d+)\s+tests\b'
+# live    -- "27 of these are `@live` tests ..."; collected with `-m live`
+live_claim_pattern = '^(\d+) of these are `@live` tests\b'
+# offline -- "... leaving 275 offline."; collected with `-m "not live"`
+offline_claim_pattern = '\bleaving (\d+) offline\b'
+# The pytest marker the live/offline split is made on (pyproject [tool.pytest]).
+live_marker = "live"
 
 [denylist]
 file = "docs-check-denylist.txt"
@@ -51,7 +63,8 @@ targets = ["README.md", "pyproject.toml", "setup.py"]
 # IT ASSERTS:
 #   1. Every README block marked 'run' produces exactly its committed stdout.
 #   2. Every symbol a README block names as importable actually imports.
-#   3. Any "N tests" claim matches what pytest collects.
+#   3. Every test-count claim (total, @live, offline) matches what pytest
+#      collects, and offline + live == total.
 #   4. No retired claim from the denylist survives in README.md, setup.py, or
 #      pyproject's [project].description / .keywords.
 #   5. The package under test resolved out of site-packages, not the checkout.
@@ -139,7 +152,7 @@ targets = ["README.md", "pyproject.toml", "setup.py"]
 #     cdfi-benchmark and fair-lending-screener, not here.
 #   * assertion 2 -- every top-level name the README's blocks import resolves.
 #   * assertion 1 -- both `run` blocks match their committed expected files.
-#   * assertion 3 -- the README's test-count claim matches collection.
-#   * assertion 6 -- all 18 __all__ exports are mentioned in the README.
+#   * assertion 3 -- all three of the README's test-count claims match collection.
+#   * assertion 6 -- every __all__ export (23 in 0.6.0) is mentioned in the README.
 #
 # An empty list is the goal state, and it is now reached rather than assumed.

@@ -354,3 +354,268 @@ DISTRESS_LEVELS = {
     # absent from the ~85k universe). NOT the same as "ineligible".
     "unknown":  "Indeterminate — eligibility not verified (no match / tract absent)",
 }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# OZ 2.0 — nomination eligibility (0.6.0)
+#
+# Governed by docs/oz2-methodology.md. That document is the decision record; this
+# block is only the binding it ruled. Read it before editing anything here.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── The GEOID-SCHEME discriminator ───────────────────────────────────────────
+#
+# TractVintage above validates BASIS: geocoder_vintage starts with Census{year}_,
+# and str(basis_year) appears in table_geoid_header. BOTH CHECKS PASS FOR BOTH
+# TABLES. The CDFI Fund NMTC table and Treasury's OZ 2.0 table are both 2020-basis
+# and both say "2020" — and they are still disjoint in Connecticut, because they
+# carry different TIGER vintages of the same 2020 delineation. Scheme strictly
+# dominates basis, and the 0.4.1 guard encodes basis, so it cannot tell these two
+# tables apart. That is why OZ 2.0 gets its own binding rather than a widened
+# TRACT_VINTAGE: making one object cover both schemes is how the distinction gets
+# lost.
+#
+# MEASURED, not assumed (2026-09-08, whole-universe, both directions):
+#   Census 2020 Gazetteer tracts : 85,395  CT prefixes 09001..09015
+#   Census 2024 Gazetteer tracts : 85,396  CT prefixes 09110..09190
+#   Treasury OZ 2.0 file (S5)    : 85,529  = the 2024 universe + 133 Island Area
+#                                   tracts; |2024_gazetteer - S5| == 0 exactly.
+#   CDFI Fund NMTC table         : 85,395  = the 2020 universe.
+# The methodology called the 2024-vintage reading "the load-bearing inference in
+# this document" (§6.9). It is no longer an inference: S5 contains the 2024
+# universe entirely and the 2020 universe does not fit inside it.
+#
+# WHY CONNECTICUT IS THE DISCRIMINATOR. 87 FR 34235 replaced CT's eight legacy
+# counties with nine COG/planning regions. The county FIPS is the middle five
+# digits of every tract GEOID, so the relabelling is visible in the KEY ITSELF and
+# nowhere else in the country: outside CT the two vintages agree on all 84,512
+# shared keys. CT is the only place in the United States where the two schemes
+# disagree, which is precisely what makes it a discriminator rather than a heuristic.
+#
+# A DECLARED discriminator would certify consistency, not truth — a maintainer
+# could set the field to whatever the code already assumes. So the scheme is
+# DERIVED from the loaded table's own CT prefixes and asserted against the
+# declaration (``OZ2TractBinding.validate_table_scheme``). A table carrying no CT
+# rows at all cannot be classified, and that is an ERROR, not a pass: see
+# ``derive_tract_scheme``. That is the fragility the design note warned about, and
+# refusing is the only answer that does not silently certify an unknown.
+TRACT_SCHEME_LEGACY_COUNTY = "legacy_county"
+TRACT_SCHEME_COG_PLANNING_REGION = "cog_planning_region"
+
+# Connecticut's eight legacy county FIPS (the CDFI Fund's scheme; 2020 vintage).
+CT_LEGACY_COUNTY_PREFIXES = frozenset({
+    "09001", "09003", "09005", "09007", "09009", "09011", "09013", "09015",
+})
+# Connecticut's nine COG/planning-region FIPS (Treasury's scheme; 2024 vintage).
+CT_COG_COUNTY_PREFIXES = frozenset({
+    "09110", "09120", "09130", "09140", "09150", "09160", "09170", "09180",
+    "09190",
+})
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DECIA territories — a COVERAGE BOUNDARY of the loaded table, not a lookup miss
+# ══════════════════════════════════════════════════════════════════════════════
+# The NMTC LIC eligibility table this package loads is built on the 2016-2020
+# ACS, whose universe is the 50 states + DC + PUERTO RICO. It does not extend to
+# the four DECIA territories below, which were never candidates for it. Measured
+# against the real CDFI Fund file (85,395 rows), each of these state FIPS matches
+# ZERO rows.
+#
+# These tracts are not hypothetical: probe_territories.py found 133 of them live
+# in the OZ 2.0 universe — American Samoa 18, Guam 57, Northern Mariana Islands
+# 26, US Virgin Islands 32 — and every one gets a real OZ 2.0 answer. Only the
+# NMTC half is uncoverable here.
+#
+# NMTC LIC status for these four IS published, in a SEPARATE CDFI Fund file,
+# DECIA_ISLAND_AREAS_FILE_TITLE below, last updated 2023-12-19, at
+# https://www.cdfifund.gov/documents/geographic-reports
+# This package DOES NOT LOAD that file. The point of this constant is to say so
+# at the point of failure instead of reporting a structural non-coverage as a
+# failed lookup — the same standard the Connecticut refusal above already meets.
+#
+# PUERTO RICO (72) IS DELIBERATELY NOT IN THIS SET. "Territory" naturally reads
+# as including PR, and that reading is exactly wrong here: PR contributes 981
+# rows to the loaded table, so a PR tract that misses IS a genuine lookup miss
+# and must keep reporting "not-found". This set is a statement about which
+# jurisdictions the loaded FILE covers, not about which FIPS look territorial.
+DECIA_TERRITORY_STATE_FIPS = frozenset({"60", "66", "69", "78"})
+
+# The Fund's exact title for the separate file, stated ONCE. summary() renders
+# it verbatim on one line so a user can copy it out and search for it; it is
+# the entire remedy the not-covered block exists to deliver. Not "NMTC ..." —
+# the Fund spells the program name out in the title.
+DECIA_ISLAND_AREAS_FILE_TITLE = (
+    "New Markets Tax Credit Low-Income Community Census Tracts "
+    "(2020 Island Areas Decennial Census)"
+)
+
+# Jurisdiction names, so the output names the place the way the Connecticut
+# refusal names Connecticut, rather than printing a two-digit code at a user.
+DECIA_TERRITORY_NAMES = {
+    "60": "American Samoa",
+    "66": "Guam",
+    "69": "Northern Mariana Islands",
+    "78": "US Virgin Islands",
+}
+
+# The public `eligibility_status` vocabulary, stated ONCE. Every prose copy of
+# this list — README, docs/, the mapper and checker docstrings — is bound to it
+# by tests/test_status_enumeration.py, and the two producers (the
+# EligibilityResult property and enrich_dataframe) are held to emit exactly
+# this set. 0.6.0 added `not-covered-territory` and the copies drifted; a
+# count word ("four outcomes") drifted with them. Order is the ladder order:
+# verdicts first, then the three INDETERMINATE statuses under which
+# nmtc_eligible is None and the four tri-state booleans are None.
+ELIGIBILITY_STATUS_VALUES = (
+    "verified-eligible",
+    "verified-ineligible",
+    "not-found",
+    "not-covered-territory",
+    "geocode-failed",
+)
+
+
+def derive_tract_scheme(geoids) -> str:
+    """Classify a tract table's GEOID scheme from the table's OWN keys.
+
+    Returns ``TRACT_SCHEME_LEGACY_COUNTY`` or
+    ``TRACT_SCHEME_COG_PLANNING_REGION``.
+
+    Raises ``ValueError`` when the table cannot be classified — no Connecticut
+    rows at all, or rows in BOTH schemes (which would mean an upstream merge of
+    two vintages, the single worst thing that could happen to this key). Both are
+    refusals rather than defaults: a gate that reads the same declaration the code
+    reads certifies consistency, not truth, and a gate that guesses on missing
+    evidence is worse than no gate.
+    """
+    ct = {str(g)[:5] for g in geoids if str(g).startswith("09")}
+    legacy = ct & CT_LEGACY_COUNTY_PREFIXES
+    cog = ct & CT_COG_COUNTY_PREFIXES
+    if legacy and cog:
+        raise ValueError(
+            f"Tract table carries BOTH Connecticut schemes — legacy county "
+            f"{sorted(legacy)} and COG/planning region {sorted(cog)}. Two TIGER "
+            f"vintages have been merged into one key space; no join against this "
+            f"table is trustworthy."
+        )
+    if legacy:
+        return TRACT_SCHEME_LEGACY_COUNTY
+    if cog:
+        return TRACT_SCHEME_COG_PLANNING_REGION
+    raise ValueError(
+        f"Tract table has no Connecticut rows ({len(set(geoids)):,} GEOIDs "
+        f"inspected), so its GEOID scheme cannot be derived. Connecticut is the "
+        f"only jurisdiction whose county FIPS differ between the 2020 and 2024 "
+        f"TIGER vintages, and therefore the only evidence in the key itself. "
+        f"Refusing to classify rather than defaulting: an unclassified table "
+        f"joined on assumption is the Connecticut defect."
+    )
+
+
+@dataclass(frozen=True)
+class OZ2TractBinding:
+    """The OZ 2.0 table's tract binding — SEPARATE from ``TRACT_VINTAGE``.
+
+    Deliberately not a subclass of, parameterisation of, or replacement for
+    ``TractVintage``. The two tables are never interchangeable and no code path
+    should be able to pass one where the other is expected.
+    """
+    basis_year: int
+    scheme: str
+    table_geoid_header: str
+    sheet_name: str
+
+    def __post_init__(self):
+        if self.scheme not in (
+            TRACT_SCHEME_LEGACY_COUNTY, TRACT_SCHEME_COG_PLANNING_REGION
+        ):
+            raise ValueError(
+                f"Unknown tract scheme {self.scheme!r}. A binding must declare a "
+                f"scheme this package can DERIVE from data (see "
+                f"derive_tract_scheme); an unrecognised name could never be "
+                f"checked against the table and would be a declaration only."
+            )
+
+    def validate_table_scheme(self, geoids) -> str:
+        """Derive the loaded table's scheme and assert it against the declaration.
+
+        Raises ``OZ2SchemaError`` on mismatch or on an underivable table. This is
+        the check ``TractVintage.__post_init__`` structurally cannot perform: it
+        reads the DATA, not the declaration.
+        """
+        from nmtcmapper.exceptions import OZ2SchemaError
+        try:
+            derived = derive_tract_scheme(geoids)
+        except ValueError as e:
+            raise OZ2SchemaError(
+                f"Could not derive the GEOID scheme of the OZ 2.0 table: {e}"
+            ) from e
+        if derived != self.scheme:
+            raise OZ2SchemaError(
+                f"OZ 2.0 table GEOID-scheme mismatch: the binding declares "
+                f"{self.scheme!r} but the table's own Connecticut keys derive as "
+                f"{derived!r}. These two schemes are DISJOINT in Connecticut "
+                f"(zero shared GEOIDs across 883/884 tracts), so a join across "
+                f"them silently drops an entire state rather than failing. "
+                f"Refusing to load."
+            )
+        return derived
+
+
+# The one binding in force for Treasury's OZ 2.0 data-transparency file.
+OZ2_TRACT_BINDING = OZ2TractBinding(
+    basis_year=2020,
+    scheme=TRACT_SCHEME_COG_PLANNING_REGION,
+    table_geoid_header="census_tract_number",
+    sheet_name="oz2_for_data_transparency",
+)
+
+# ── Source ───────────────────────────────────────────────────────────────────
+# Treasury OTA data-transparency file, named as authoritative by the Appendix to
+# Rev. Proc. 2026-14. NOTE the directory: `oz-tracker` 0.2.0's URL for this file
+# (`/system/files/136/Eligible-LICs-for-Nomination-as-2027-QOZs.xlsx`) is a 404 —
+# both the directory AND the filename changed.
+OZ2_URL = (
+    "https://home.treasury.gov/system/files/131/"
+    "OZ2-Eligible-LIC-Tracts-Data-Transparency-03232026.xlsx"
+)
+
+# Digest pin, verified 2026-08-05 (methodology §0) and re-verified 2026-09-08.
+# NOT enforced at load time, and the reason is the same reason it is recorded:
+# this file is EXPECTED to be revised. Its sheet is named `..._cor` (corrected),
+# and its OOXML dcterms:created is 2026-04-06 while its own filename says
+# 03232026 — two weeks apart. A hard digest gate would convert every future
+# Treasury correction into a total package outage, including corrections that
+# leave the structure identical. Structure is what the loader enforces (headers,
+# row-count floor, {0,1} allowlists, GEOID scheme); the digest is asserted by a
+# @live test so a silent re-publish is REPORTED rather than either ignored or
+# fatal. Same division of labour as the NMTC table's `_validate_xlsb_header`.
+OZ2_SHA256 = "9d41e6581475ff23f0db2b889d01284de4f996d08e71ca72a6a4031d57e37dc0"
+
+# ── Live structure — schema validation ───────────────────────────────────────
+# All twelve headers are pinned, not just the ones read. The file has twelve
+# columns and no positional binding to protect; pinning all twelve means an
+# upstream column INSERTION is caught even if every column this package reads
+# keeps its name.
+OZ2_SHEET = OZ2_TRACT_BINDING.sheet_name
+OZ2_COLUMN_COUNT = 12
+OZ2_EXPECTED_HEADERS = (
+    "census_tract_number", "state", "county", "cbsa", "poverty_rate", "mfi",
+    "state_mfi", "cbsa_mfi", "area_mfi", "mfi_ratio", "eligible_lic",
+    "rural_status",
+)
+# The two columns whose values become user-facing flags.
+OZ2_ELIGIBLE_LIC_COLUMN = "eligible_lic"
+OZ2_RURAL_STATUS_COLUMN = "rural_status"
+
+# Row-count floor. The live universe is 85,529; set far below it so a legitimately
+# smaller future vintage is not rejected, and far above any degenerate parse.
+OZ2_MIN_ROWS = 1000
+
+# Both flag columns are strict 0/1 integers across all 85,529 live rows — zero
+# blanks, zero third values. The NMTC table's lesson applies unchanged: the header
+# guard pins header STRINGS, not cell VOCABULARIES, and a re-publish that changes
+# a 1 to "Y" would pass every header check. `1` parses truthy and `0` falsy, so an
+# unrecognised value would silently become a FABRICATED NEGATIVE — the exact
+# direction this package exists to close.
+OZ2_FLAG_ALLOWED = frozenset({0, 1})

@@ -1,6 +1,7 @@
 from nmtcmapper.mapper import NMTCMapper
 from nmtcmapper.eligibility.checker import EligibilityResult
 from nmtcmapper.data.loader import load_eligibility_table, load_sample_table
+from nmtcmapper.data.schema import ELIGIBILITY_STATUS_VALUES
 from nmtcmapper.geocoder.census import geocode_address
 from nmtcmapper.methodology import get_methodology_path
 from nmtcmapper.exceptions import (
@@ -8,6 +9,7 @@ from nmtcmapper.exceptions import (
     EligibilityDataError, EligibilityDownloadError, EligibilityParseError,
     EligibilitySchemaError, EligibilityValueError,
     OZDataError, OZDownloadError, OZParseError,
+    OZ2DataError, OZ2DownloadError, OZ2ParseError, OZ2SchemaError,
     GeocoderError, GeocoderTransportError, AmbiguousAddressError,
 )
 
@@ -19,12 +21,16 @@ except PackageNotFoundError:
     __version__ = "0.0.0+unknown"
 
 __all__ = [
-    "NMTCMapper", "EligibilityResult",
+    "NMTCMapper", "EligibilityResult", "ELIGIBILITY_STATUS_VALUES",
     "load_eligibility_table", "load_sample_table", "geocode_address",
     "get_methodology_path",
     "NMTCMapperError",
     "EligibilityDataError", "EligibilityDownloadError", "EligibilityParseError",
     "EligibilitySchemaError", "EligibilityValueError",
     "OZDataError", "OZDownloadError", "OZParseError",
+    "OZ2DataError",
+    "OZ2DownloadError",
+    "OZ2ParseError",
+    "OZ2SchemaError",
     "GeocoderError", "GeocoderTransportError", "AmbiguousAddressError",
 ]

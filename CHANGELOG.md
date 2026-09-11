@@ -2,6 +2,326 @@
 
 All notable changes to nmtc-mapper are documented here.
 
+## [0.6.0] — 2026-09-11
+
+**The OZ 2.0 restoration.** `docs/oz2-methodology.md` was written 2026-08-05 as a
+complete pre-implementation decision document and 0.5.0 shipped none of it. This
+release builds what that document ruled: two tri-state flags on
+`EligibilityResult`, sourced from Treasury's OZ 2.0 data-transparency file, plus
+the GEOID-scheme binding that makes them safe.
+
+**Nothing here is a designation, and nothing can be.** Every flag concerns
+*eligibility for nomination*. The nomination window runs to 2026-10-28 at the
+latest under the §1400Z-1(b)(2) extension, and the Secretary's consideration
+period to 2026-12-28. A State may designate only 25% of its LICs — 25 tracts
+where it has fewer than 100, and the quotient rounds up — so a State's eligible
+tracts materially exceed what it may ever designate. `True` is not "will be an OZ".
+
+**No NMTC number moves.** The NMTC table, its verdict logic and `is_opportunity_zone`
+are untouched. This release adds a second source on a second tract scheme; it
+does not reinterpret the first.
+
+---
+
+### UPGRADING FROM 0.5.0 — READ THIS FIRST
+
+**`EligibilityResult` now carries two fields whose names both begin "OZ" and whose
+`False` mean opposite things.** This is the same hazard shape as 0.5.0's
+`bool → Optional[bool]`, and it is enumerated here for the same reason: it does
+not break loudly.
+
+| field | program | `True` | `False` | `None` |
+|---|---|---|---|---|
+| `is_opportunity_zone` | OZ **1.0** (2018 designations, 2010-basis) | on the designation list | **never returnable** | everything else |
+| `is_oz2_nomination_eligible` | OZ **2.0** (2026 eligibility, 2020-basis / 2024 vintage) | eligible for nomination | **a real published fact** | not scored, or wrong key scheme |
+
+| call shape | before | after | replacement |
+|---|---|---|---|
+| `if not r.is_oz2_nomination_eligible:` | — | catches the ineligible **and** every indeterminate and refused tract | `if r.oz2_nomination_status.startswith("ineligible"):` |
+| `if r.is_rural_area_qoz_eligible:` | — | silently excludes every non-eligible tract, which is most of them | switch on `r.rural_area_qoz_status` |
+| `r.is_oz2_nomination_eligible is False` | — | true for tracts Treasury scored **and** for tracts it had no data for | `r.oz2_nomination_status == "ineligible-on-treasury-inputs"` |
+| treating the two OZ fields as one answer | — | they are different programs on different tract schemes | read both status strings |
+| `df[~df.is_oz2_...]` | — | `TypeError` on an object column holding `None` | filter with `!= True` |
+| `status in {"not-found", "geocode-failed"}` as the indeterminate test | the two indeterminate statuses | **`False` for every territory row** — `not-covered-territory` is a new, additive `eligibility_status` value whose `nmtc_eligible` is `None`, so the row falls through to the falsy-`None` trap | `status in {"not-found", "not-covered-territory", "geocode-failed"}`, or `r.nmtc_eligible is None` |
+
+**`eligibility_status` gained a fifth value, and it is indeterminate.**
+`not-covered-territory` (American Samoa 60, Guam 66, Northern Mariana Islands 69,
+US Virgin Islands 78 — see *Fixed*) does not break loudly: a membership test
+written against the 0.5.0 pair silently classifies a territory row as a verdict.
+The full vocabulary is now exported as `nmtcmapper.ELIGIBILITY_STATUS_VALUES`;
+the indeterminate subset is its last three values.
+
+**Read the status strings, not the booleans.** `oz2_nomination_status` and
+`rural_area_qoz_status` are the supported surface, exactly as
+`opportunity_zone_status` is for OZ 1.0.
+
+---
+
+### Added
+
+- **`is_oz2_nomination_eligible`** — `Optional[bool]`, from Treasury's
+  `eligible_lic` column. `True` for 25,332 tracts, `False` for 60,197, `None` for
+  a tract absent from the 85,529-row universe or keyed on a scheme Treasury does
+  not use.
+
+  A `False` is returnable here — and only here — because the source is a **full
+  tract universe carrying an explicit 0/1**, not a list of the eligible.
+  Rev. Proc. 2026-14 §5.04 states in its own words that the Appendix is **not
+  exhaustive** and reserves a live mechanism for nominating an unlisted tract, so
+  absence from the *Appendix* could only ever be `None`. `False` means *"not an
+  eligible LIC on the 2020-2024 ACS / 2020 DECIA inputs Treasury used"* — a fact
+  about a published determination, not "not eligible".
+
+- **`is_rural_area_qoz_eligible`** — `Optional[bool]`, from `rural_status`,
+  **restricted to `eligible_lic == 1`**: `True` for 8,334, `False` for 16,998,
+  `None` for everything else. Treasury populates `rural_status` for the whole
+  universe, but its rural methodology determines rural status over *eligible*
+  tracts only; 20,377 ineligible tracts carry a rural flag and this package
+  reports none of them. A populated column is not a published determination.
+
+  The name does not say `is_rural`. The referent is not "this tract is rural" but
+  "this tract, *if* nominated and *if* designated, would be a QOZ comprised
+  entirely of a rural area" — §1400Z-2(b)(2)(C)(ii), relevant to QROF
+  qualification for amounts invested after 2026-12-31. Treasury's determination
+  also admits tracts that *do* overlap an urban area under a de minimis rule, so
+  `True` is not "contains no urban land".
+
+- **`oz2_nomination_status` / `rural_area_qoz_status`** — string accessors,
+  parallel to `opportunity_zone_status`.
+
+- **`OZ2DataError` / `OZ2DownloadError` / `OZ2ParseError` / `OZ2SchemaError`** — a
+  separate exception branch, so an `except OZDataError` written for the 2018
+  designation list does not start swallowing failures of a file it never knew about.
+
+- **A second tract binding, `OZ2_TRACT_BINDING`, with a derived GEOID-scheme
+  discriminator.** `TractVintage` validates *basis*, and basis cannot tell these
+  two tables apart: both are 2020-basis and both say "2020", and they are still
+  disjoint in Connecticut. The scheme is **derived from the loaded table's own
+  Connecticut keys** and asserted against the declaration — a discriminator a
+  maintainer sets by hand would certify consistency, not truth. A table with no
+  Connecticut rows cannot be classified and is **refused**, not defaulted.
+
+### Fixed
+
+- **A leading-zero-stripped California GEOID was told it is American Samoa.**
+  The territory check sliced two characters off whatever it was handed, with no
+  length check. `"6037101110"` — Los Angeles County with its leading zero gone,
+  the shape Excel and CSV emit, and the int `6037101110` likewise — slices to
+  `"60"`, American Samoa's state FIPS, and rendered a confident *"NOT COVERED —
+  American Samoa is outside ..."* block with a Description of *"NOT a lookup
+  miss"*, when the remedy is `zfill(11)` and the README already says so.
+  Measured against the live CDFI Fund file: **8,707 of 85,395 tracts** collide
+  this way, every one of them in California (prefix `60`); `66`, `69` and `78`
+  collide with nothing, since no state + county pair spells 066/069/078. This
+  was the misdescription class the territory fix above was written to remove,
+  reintroduced at far greater reach than the 133 tracts it fixed.
+
+  Only a well-formed 11-digit GEOID can now carry a territory claim; a malformed
+  id returns `not-found` on both status ladders — exactly the behaviour before
+  the territory fix, and what *Known limitations* documents. **No normalization
+  and no sixth status value.** `zfill` would change answers for every caller
+  who gets `not-found` today, and both belong to 0.7.0 with an audited
+  methodology for input that was never a GEOID. Connecticut was never exposed —
+  its refusal slices five characters against five-character prefixes, and a
+  stripped GEOID cannot start with `0` — and a test now pins the width so it is
+  not "simplified" to a two-character slice later.
+
+- **`distress_description` and `summary()` disagreed on one object.** The
+  territory fix substituted the coverage wording inside `summary()` and left the
+  public `distress_description` property on `DISTRESS_LEVELS`, so a Guam result
+  printed *"Not covered — ... NOT a lookup miss"* on the page and returned
+  *"Indeterminate — eligibility not verified (no match / tract absent)"* from the
+  property — the exact wording this changelog said was removed. The selection
+  now lives in the property; `summary()` reads it. `distress_level` is untouched.
+
+- **The Island Areas file title rendered across two lines, abbreviated.** The
+  block promised the file name on one line so a user could copy it out; it
+  printed *"NMTC Low-Income Community Census Tracts"* split before the
+  parenthetical. The Fund's title is *"New Markets Tax Credit Low-Income
+  Community Census Tracts (2020 Island Areas Decennial Census)"*; it is now a
+  schema constant (`DECIA_ISLAND_AREAS_FILE_TITLE`), rendered verbatim on one
+  line, and the gate asserts the full title rather than only the parenthetical.
+
+- **`ELIGIBILITY_STATUS_VALUES` was not importable.** schema.py called it "the
+  public vocabulary, stated ONCE" and consumers were told to switch on it, but
+  it was in no `__all__` and no doc. Exported from the top level; named in the
+  README and `docs/api.md`; `not-covered-territory` added to UPGRADING as the
+  additive enum value it is, with the corrected membership test.
+
+- **The README promised two fixes to "0.6.0" that 0.6.0 does not contain**
+  (GEOID normalization; `opportunity_zone_status` on junk input), and a third
+  ("per-row batch failure capture is 0.6.0's", also in `census.py`'s docstring)
+  the same way. All retargeted to **0.7.0**. A new gate,
+  `tests/test_forward_promises.py`, reads the build version from
+  `pyproject.toml` and fails when README.md or a docs/ page names it as a
+  promise rather than a release note — a version-numbered promise in shipped
+  documentation is a contract that comes due, and the release it names is the
+  release nobody re-reads it in.
+
+- **The enumeration gate was blind to two drift shapes it was built for.** A
+  paraphrase of the biconditional ("exactly" → "precisely", value dropped) and a
+  copy cut to three values were both green. The stated-in-full gate now inspects
+  every list-shaped run of two or more statuses, and the contract gate anchors
+  on the status values and the `None` token rather than an adverb. Both
+  mutations observed red.
+
+- **`tools/docs_check.py`: a tautological sum check with an overclaiming
+  comment, an ignored exit status, and an `IndexError` on a pattern with no
+  capture group.** `-m X` and `-m "not X"` partition the collection by
+  construction, so `offline + live == total` could never fail and the comment
+  claiming it caught a lost `@live` mark was false; the check is deleted and
+  the README's own three numbers are still cross-checked. A collection error
+  now fails the gate (`readme-test-count-collect`) instead of parsing a count
+  out of a broken run; a pattern without a capture group is a named finding
+  (`readme-test-count-pattern`). `tests/test_docs_check_tool.py` gates all
+  three.
+
+- **A territory tract was told "not found" when the truth is "not covered".**
+  For a GEOID in American Samoa (60), Guam (66), the Northern Mariana Islands
+  (69) or the US Virgin Islands (78), `summary()` rendered *"tract not in
+  eligibility table"* and *"Indeterminate — eligibility not verified (no match /
+  tract absent)"*. Every word is true in isolation and the composite
+  misdescribes the situation: both phrases describe a **lookup miss** — a table
+  that could have held the tract and didn't — and invite a retry with a
+  different vintage or a corrected id. There is nothing to retry. The loaded
+  NMTC LIC table is built on the **2016-2020 ACS**, whose universe is the 50
+  states + DC + Puerto Rico; the four DECIA territories were never candidates
+  for it. Measured against the live CDFI Fund file (85,395 rows), each of those
+  four state FIPS matches **zero** rows, while Puerto Rico matches **981**.
+
+  A fifth `eligibility_status` value, **`not-covered-territory`**, now separates
+  the structural boundary from the miss, and `summary()` prints the cause and
+  the remedy at the point of failure — naming the CDFI Fund's separate *"New
+  Markets Tax Credit Low-Income Community Census Tracts (2020 Island Areas
+  Decennial Census)"* file (last updated 2023-12-19) — the standard the
+  Connecticut refusal already met. Applied to **both** status ladders: the
+  `EligibilityResult` property and `enrich_dataframe`, which are independent and
+  would otherwise disagree about the same GEOID.
+
+  **Still indeterminate.** `nmtc_eligible` stays `None` and the other eight
+  fields stay `None`; only the *description* of the indeterminacy changed. No
+  `None` became a `False`. `distress_level` remains `"unknown"` — the new
+  description is selected from the status, deliberately **not** by adding a
+  `DISTRESS_LEVELS` entry, since a coverage boundary is not a distress finding
+  and would otherwise leak a non-distress value into every consumer that
+  switches on distress. Puerto Rico is **not** in the constant, and a test
+  asserts it: the set states which jurisdictions the loaded **file** covers, not
+  which FIPS look territorial. The Island Areas file is **not loaded** — that is
+  a data-source addition with its own vintage, column mapping, distress criteria
+  and audit, and is a 0.7.0 candidate. This release stops the misdescription; it
+  does not close the gap.
+
+- **A test documented as "mocked success" performed a real download.**
+  `tests/test_sample_mode.py::test_data_source_marker` mocked two of the three
+  loaders `NMTCMapper.__init__` calls; 0.6.0 added `load_oz2_table()` as the
+  third and the test went on "passing" by downloading Treasury's file for real —
+  invisible on a networked machine, an `OZ2DownloadError` offline. The third
+  loader is now mocked, and the test additionally asserts the **absence of the
+  behaviour rather than the presence of the mocks**: the transport is made to
+  raise, so a future fourth constructor dependency reddens this test when it is
+  added instead of when someone next runs the suite offline. The tripwire also
+  redirects the cache to an empty directory — without that it is
+  machine-dependent theatre, since a warm `~/.nmtcmapper` cache satisfies an
+  unmocked loader from disk and the transport is never touched. That is exactly
+  how the original defect survived a green run. No product code changed.
+
+- `license = {text = "MIT"}` replaced with the PEP 639 `license = "MIT"` plus
+  `license-files`; build requirement raised to `setuptools>=77`. The old form is
+  deprecated portfolio-wide with removal announced 2027-02-18. Verified rather
+  than assumed: setuptools 77.0.3, 78.1.1 and 80.9.0 all declare
+  `Requires-Python: >=3.9`, so the 3.9 floor is unaffected.
+
+### Known gaps — stated, not hidden
+
+- **Connecticut is refused, out loud.** The CDFI Fund keys Connecticut on legacy
+  counties (09001-09015); Treasury keys it on COG/planning regions
+  (09110-09190). The two share **zero** GEOIDs across 883 and 884 tracts
+  respectively, though their six-digit tract codes are identical sets — a pure
+  relabelling under 87 FR 34235. Every OZ 2.0 flag is `None` for a legacy CT key,
+  `oz2_nomination_status` returns `refused-connecticut-scheme`, and `summary()`
+  prints the refusal and the remedy. 243 eligible CT tracts are unanswerable
+  through this package's NMTC key; a CT answer requires a 09110-09190 key.
+
+  **No crosswalk is offered.** The mapping is mechanically available and even
+  bijective at the tract-code level. It is refused because the package would be
+  silently converting a published federal determination keyed to one geography
+  into an inferred determination on another, changing nothing about the column
+  name, the dtype or the row count.
+
+- **A `0` Treasury published with nothing behind it.** Found by execution during
+  this build; **not in the methodology, which counted the 0/1 partition but not
+  its nulls.** 1,080 tracts have *both* `poverty_rate` and `mfi_ratio` blank —
+  every input to the LIC test missing — and Treasury published `eligible_lic = 0`
+  for all of them. 1,047 are reachable through this package's own tract universe,
+  and 259 carry ordinary tract codes rather than the water/special codes one
+  would expect.
+
+  Treasury's own convention elsewhere in the file shows a missing input does not
+  by itself defeat eligibility: 1,068 tracts with a blank `mfi_ratio` and poverty
+  ≥ 20% were published `eligible_lic = 1`. So those 1,080 zeroes are zeroes only
+  because *nothing at all* was measurable.
+
+  **The value is still `False`** — 0 is what Treasury published, and this package
+  does not overrule a federal determination on its own arithmetic. But the
+  condition is surfaced: `oz2_nomination_status` returns
+  `ineligible-no-inputs-published` rather than `ineligible-on-treasury-inputs`,
+  and `oz2_inputs_missing` carries the provenance. **Callers who must not act on
+  an unmeasured negative should switch on the status string.** Whether the value
+  should instead be `None` is a decision for the methodology, not for a build.
+
+- **The four DECIA territories have no NMTC answer here, and now say so
+  precisely.** American Samoa (60), Guam (66), CNMI (69) and USVI (78) have no
+  row in the CDFI Fund NMTC table at all — measured, zero rows each — so their
+  NMTC answer is `None` while their OZ 2.0 answer is real; the one place OZ 2.0
+  is the more complete of the two. 133 such tracts exist in the OZ 2.0 universe
+  (AS 18, GU 57, MP 26, VI 32) and every one gets a real OZ 2.0 verdict. They
+  now report `eligibility_status == "not-covered-territory"` and `summary()`
+  names the remedy: territory LIC status is published in the CDFI Fund's
+  separate *"New Markets Tax Credit Low-Income Community Census Tracts (2020
+  Island Areas Decennial Census)"* file (2023-12-19). **This package does not
+  load that file** — a 0.7.0 candidate, gated on its own vintage, mapping and audit
+  questions. Puerto Rico is *covered* (981 rows) and is deliberately excluded
+  from the territory constant.
+
+- **One deprecation warning, from a dependency, left visible on purpose.** The
+  suite emits exactly one warning on Python 3.14.6 / pandas 3.0.5:
+
+  > `pandas/core/internals/blocks.py:347: DeprecationWarning: Bitwise inversion
+  > '~' on bool is deprecated and will be removed in Python 3.16. This returns
+  > the bitwise inversion of the underlying int object and is usually not what
+  > you expect from negating a bool. Use the 'not' operator for boolean negation
+  > or ~int(x) if you really want the bitwise inversion of the underlying int.`
+
+  Raised from `tests/test_fabricated_negatives.py::test_the_documented_upgrade_filter_works`.
+  **The deprecated operation is pandas', not this package's**: `Series.__invert__`
+  (`generic.py:1495`) hands `operator.invert` to `BlockManager.apply`, which
+  applies it to each element of an object-dtype block — including a Python
+  `bool`. This package's own source performs no bitwise inversion anywhere; the
+  test uses the ordinary `~Series` API precisely to assert that it raises
+  `TypeError`, which is the upgrade note above. **Not suppressed, and no blanket
+  `filterwarnings` entry added.** A silenced third-party deprecation is how a
+  breaking dependency upgrade arrives without warning; it is recorded here
+  instead so the pandas/Python 3.16 interaction is tracked in the open.
+
+- The 25% per-State designation cap is **not modelled**. Treasury's arithmetic is
+  **not verified** — `False` means "Treasury published 0", not "0 is correct".
+  The rural determination's block-level spatial work is **not reproduced**.
+
+### Source
+
+Treasury OTA, `OZ2-Eligible-LIC-Tracts-Data-Transparency-03232026.xlsx`, sheet
+`oz2_for_data_transparency`. Pinned by digest and re-verified against the live
+file by a `@live` test rather than at load time: this file is *expected* to be
+revised — the companion Appendix sheet is named `..._cor` and the file's OOXML
+`dcterms:created` (2026-04-06) is two weeks after the date in its own filename —
+and a hard digest gate would turn every future Treasury correction into a total
+outage. Structure is what the loader enforces: all twelve headers, a row-count
+floor, a `{0, 1}` allowlist on both flag columns, and the GEOID scheme.
+
+**Every figure in this entry is asserted against Treasury's file at test time**
+(`tests/test_oz2.py::OZ2_PUBLISHED_FIGURES` → `tests/test_live_oz2_file.py`).
+None is typed by hand.
+
 ## [0.5.0] — 2026-08-13
 
 **The fabricated-negative release.** 0.4.0 built a tri-state contract for the

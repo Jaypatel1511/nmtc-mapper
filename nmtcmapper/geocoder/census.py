@@ -173,11 +173,14 @@ async def _batch_geocode_async(addresses: list) -> list:
     previous silent per-row ``None`` became a fabricated "ineligible"
     downstream, and losing time is strictly better than losing truth.
 
-    Per-row failure capture is 0.6.0's, and needs a designed contract rather than
+    Per-row failure capture is 0.7.0's, and needs a designed contract rather than
     a flag: what column carries the error, and how ``eligibility_status`` reports
     a row that failed TRANSPORT rather than failed to match. (0.4.0 through 0.4.3
     carried "planned for 0.4.1" here; 0.4.1 and 0.4.2 both shipped without it, so
-    the promise was itself a false claim by the time anyone read it.)
+    the promise was itself a false claim by the time anyone read it. 0.5.0
+    retargeted it to 0.6.0, and 0.6.0 ships without it too — a version promise
+    in shipped text is a contract that comes due, which is why
+    tests/test_forward_promises.py now reads the build version and fails on one.)
 
     Args:
         addresses: List of address strings

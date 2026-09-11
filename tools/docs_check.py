@@ -43,7 +43,8 @@ THE SIX ASSERTIONS
   1. Every block marked `run` produces exactly its committed stdout.
   2. Every symbol a block names as importable actually imports (README ->
      package: catches DRIFT).
-  3. Any "N tests" claim in the README matches what pytest collects.
+  3. Every test-count claim in the README (total, @live, offline) matches
+     what pytest collects, and the three sum.
   4. No retired claim from the denylist survives in README/setup.py/pyproject
      description+keywords.
   5. Precondition: the package resolves out of site-packages, not the checkout.
@@ -119,7 +120,7 @@ import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 try:  # 3.11+
     import tomllib
@@ -718,57 +719,187 @@ def check_all_documented(
 
 
 # --------------------------------------------------------------------------
-# Assertion 3: any "N tests" claim matches collection
+# Assertion 3: every test-count claim matches collection
 # --------------------------------------------------------------------------
+#
+# A README that says "N tests ... M of these are @live ... leaving K offline"
+# makes THREE claims, and until 0.6.0 this assertion read only the first. The
+# other two drifted for exactly one release before anyone noticed, because the
+# only gate that could see them was reading one number out of three. So now:
+#
+#   * total   -- `pytest tests --collect-only -q`
+#   * live    -- the same, plus `-m <marker>`
+#   * offline -- the same, plus `-m "not <marker>"`
+#
+# Each claimed number is checked against its own collection, and the README's
+# three STATED numbers are cross-checked against one another (offline + live
+# must equal total). That second check is about the README, not about pytest:
+# the three COLLECTIONS always sum, because `-m X` and `-m "not X"` partition
+# the suite by construction, so no collection-level sum can ever disagree. In
+# particular this assertion CANNOT detect a test that lost its marker -- such a
+# test moves from one collection to the other and every count still matches
+# whatever the README says about it. (FIX4 F7: an earlier revision carried a
+# collection sum check with a comment claiming exactly that detection; the
+# check was a tautology and is gone.)
+#
+# pytest's exit status is checked: a collection error prints a parseable
+# "N tests collected, 1 error" and exits 2, and a count parsed out of a suite
+# that cannot import certifies nothing. Exit 5 ("no tests collected") is 0.
+#
+# Each number has its own pattern in docs-check.toml [tests]. The rule for a
+# pattern is: CONFIGURED means the README makes that claim, so a configured
+# pattern that matches nothing is a FAILURE -- the claim moved and the gate
+# lost it, which is a silent green, the thing this tool exists to refuse. A
+# key that is ABSENT from the toml is the statement "this README makes no such
+# claim", and only that is a note. Two states, two meanings; no default pattern
+# blurs them.
+
+TEST_COUNT_CLAIMS = (
+    # (toml key, finding id, what the number counts, marker expression or None)
+    ("claim_pattern", "readme-test-count", "total", None),
+    ("live_claim_pattern", "readme-test-count-live", "live", "{marker}"),
+    ("offline_claim_pattern", "readme-test-count-offline", "offline", "not {marker}"),
+)
+
+
+# pytest exit statuses that mean the collection is trustworthy: 0 (ok) and 5
+# (no tests collected -- a marker that selects nothing, which is a count of 0).
+# Anything else (2: interrupted / collection error, 3: internal error, 4:
+# usage error) means the count, parseable or not, describes a broken run.
+_COLLECT_OK_EXIT = (0, 5)
+
+
+def _collect_count(
+    root: Path, tests_path: str, marker_expr: Optional[str]
+) -> Tuple[Optional[int], str, int]:
+    """Run pytest --collect-only and return (selected count, raw tail, exit status).
+
+    pytest prints "302 tests collected" with no -m, and
+    "27/302 tests collected (275 deselected)" with one; the SELECTED number is
+    what a `-m` claim is about, so it is group(1) in both shapes. A run that
+    selects nothing prints "no tests collected", which is 0, not unparseable.
+    The exit status is returned alongside because a count CAN parse out of a
+    failed run ("302 tests collected, 1 error", exit 2) and the caller must
+    refuse it.
+    """
+    cmd = [sys.executable, "-m", "pytest", str(tests_path), "--collect-only", "-q",
+           "-p", "no:cacheprovider"]
+    if marker_expr is not None:
+        cmd += ["-m", marker_expr]
+    proc = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
+    lines = (proc.stdout + ("\n" + proc.stderr if proc.stderr.strip() else "")).splitlines()
+    tail = "\n".join(f"      {ln}" for ln in lines[-8:])
+    m = re.search(r"(\d+)(?:/\d+)?\s+tests?\s+collected", proc.stdout)
+    if m:
+        return int(m.group(1)), tail, proc.returncode
+    if re.search(r"\bno tests collected\b", proc.stdout):
+        return 0, tail, proc.returncode
+    return None, tail, proc.returncode
 
 
 def check_test_count(
-    root: Path, readme: str, tests_path: str, pattern: str, report: Report
+    root: Path, readme: str, tests_path: str, tests_cfg: Dict[str, Any], report: Report
 ) -> None:
-    claim_re = re.compile(pattern, re.MULTILINE)
-    m = claim_re.search(readme)
-    if not m:
-        report.note("README makes no test-count claim (not a failure)")
+    marker = tests_cfg.get("live_marker", "live")
+
+    # ---- read the claims ---------------------------------------------
+    claimed: Dict[str, int] = {}
+    for key, fid, what, _ in TEST_COUNT_CLAIMS:
+        pattern = tests_cfg.get(key)
+        if pattern is None:
+            report.note(
+                f"no {what} test-count pattern configured ({key}); claim not checked"
+            )
+            continue
+        compiled = re.compile(pattern, re.MULTILINE)
+        if compiled.groups < 1:
+            report.fail(
+                "readme-test-count-pattern",
+                f"[tests].{key} has no capture group: {pattern!r}. group(1) is "
+                f"the number the README states; a pattern without one cannot "
+                f"read it.",
+            )
+            continue
+        m = compiled.search(readme)
+        if not m:
+            report.fail(
+                fid,
+                f"[tests].{key} is configured but matches nothing in the README: "
+                f"{pattern!r}. Either the claim moved (fix the pattern) or the "
+                f"README no longer makes it (delete the key).",
+            )
+            continue
+        claimed[what] = int(m.group(1))
+
+    if not claimed:
         return
 
-    claimed = int(m.group(1))
     tests_dir = root / tests_path
     if not tests_dir.exists():
-        report.fail(
-            "readme-test-count",
-            f"README claims {claimed} tests but {tests_path} is not present to "
-            f"collect from.",
-        )
+        for key, fid, what, _ in TEST_COUNT_CLAIMS:
+            if what in claimed:
+                report.fail(
+                    fid,
+                    f"README claims {claimed[what]} {what} tests but {tests_path} is "
+                    f"not present to collect from.",
+                )
         return
 
-    proc = subprocess.run(
-        [sys.executable, "-m", "pytest", str(tests_path), "--collect-only", "-q"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-    )
-    cm = re.search(r"(\d+)\s+tests?\s+collected", proc.stdout)
-    if not cm:
-        cm = re.search(r"(\d+)/(\d+)\s+tests?\s+collected", proc.stdout)
-        actual = int(cm.group(2)) if cm else None
-    else:
-        actual = int(cm.group(1))
+    # ---- collect each claimed number -------------------------------------
+    # Only the numbers the README states are collected: the collections
+    # themselves cannot disagree with one another (see the header comment), so
+    # an unclaimed collection would be a pytest run with nothing to compare to.
+    actual: Dict[str, Optional[int]] = {}
+    for key, fid, what, marker_tmpl in TEST_COUNT_CLAIMS:
+        if what not in claimed:
+            continue
+        expr = marker_tmpl.format(marker=marker) if marker_tmpl else None
+        count, tail, rc = _collect_count(root, tests_path, expr)
+        if rc not in _COLLECT_OK_EXIT:
+            # A parseable count out of a broken run is the trap: "302 tests
+            # collected, 1 error" parses as 302 and exits 2.
+            report.fail(
+                "readme-test-count-collect",
+                f"pytest --collect-only ({what}) exited {rc}; the suite could "
+                f"not be collected cleanly, so no count from it is trusted:"
+                f"\n{tail}",
+            )
+            actual[what] = None
+            continue
+        actual[what] = count
+        if count is None:
+            report.fail(
+                fid,
+                f"could not parse a collected-test count from pytest output "
+                f"({what}):\n{tail}",
+            )
 
-    if actual is None:
-        report.fail(
-            "readme-test-count",
-            "could not parse a collected-test count from pytest output:\n"
-            + "\n".join(f"      {ln}" for ln in proc.stdout.splitlines()[-8:]),
-        )
-        return
+    # ---- compare each claim to its collection ------------------------
+    for key, fid, what, _ in TEST_COUNT_CLAIMS:
+        if what not in claimed or actual.get(what) is None:
+            continue
+        if claimed[what] != actual[what]:
+            report.fail(
+                fid,
+                f"README claims {claimed[what]} {what} tests; pytest collects "
+                f"{actual[what]}.",
+            )
+        else:
+            report.note(f"{what} test-count claim {claimed[what]} matches collection")
 
-    if claimed != actual:
-        report.fail(
-            "readme-test-count",
-            f"README claims {claimed} tests; pytest collects {actual}.",
-        )
-    else:
-        report.note(f"test-count claim {claimed} matches collection")
+    # ---- and the claims against one another --------------------------
+    if all(w in claimed for w in ("total", "live", "offline")):
+        if claimed["offline"] + claimed["live"] != claimed["total"]:
+            report.fail(
+                "readme-test-count-sum",
+                f"README's own numbers do not sum: {claimed['offline']} offline + "
+                f"{claimed['live']} live != {claimed['total']} total.",
+            )
+        else:
+            report.note(
+                f"test-count claims sum: {claimed['offline']} + {claimed['live']} "
+                f"== {claimed['total']}"
+            )
 
 
 # --------------------------------------------------------------------------
@@ -1000,13 +1131,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     # Assertion 3
     tests_cfg = config.get("tests", {})
-    check_test_count(
-        root,
-        readme,
-        tests_cfg.get("path", "tests"),
-        tests_cfg.get("claim_pattern", r"^(\d+)\s+tests\b"),
-        report,
-    )
+    check_test_count(root, readme, tests_cfg.get("path", "tests"), tests_cfg, report)
     # Assertion 4
     deny_cfg = config.get("denylist", {})
     deny_file = root / deny_cfg.get("file", "docs-check-denylist.txt")

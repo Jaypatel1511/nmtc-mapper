@@ -19,6 +19,10 @@ misleading message misdirects just as badly as a swallowed one).
     ├─ OZDataError
     │  ├─ OZDownloadError
     │  └─ OZParseError
+    ├─ OZ2DataError                  # 0.6.0: OZ 2.0 nomination-eligibility source (Treasury S5)
+    │  ├─ OZ2DownloadError
+    │  ├─ OZ2ParseError
+    │  └─ OZ2SchemaError             #   header / row-count / value / GEOID-SCHEME mismatch
     └─ GeocoderError                 # 0.4.0: address -> tract resolution failures
        ├─ GeocoderTransportError     #   transport / HTTP-status / decode failure, retries exhausted
        └─ AmbiguousAddressError      #   multiple matches resolving to *different* tracts
@@ -85,6 +89,38 @@ class OZParseError(OZDataError):
     (corrupt bytes, wrong content-type, missing sheet / tract column, bad zip)."""
 
 
+class OZ2DataError(NMTCMapperError):
+    """The OZ 2.0 nomination-eligibility dataset could not be obtained (0.6.0).
+
+    A SEPARATE BRANCH FROM ``OZDataError`` ON PURPOSE. OZ 1.0 and OZ 2.0 are
+    different programs on different tract schemes with different answer spaces
+    (see ``EligibilityResult``). A downstream ``except OZDataError`` written for
+    the 2018 designation list must NOT silently start swallowing failures of a
+    2026 Treasury file it has never heard of.
+    """
+
+
+class OZ2DownloadError(OZ2DataError):
+    """Could not download the Treasury OZ 2.0 data-transparency file
+    (403 / 404 / DNS / timeout / connection), and no usable cached copy existed."""
+
+
+class OZ2ParseError(OZ2DataError):
+    """The OZ 2.0 file was obtained but could not be parsed (corrupt bytes,
+    wrong content-type, missing ``oz2_for_data_transparency`` sheet, bad zip)."""
+
+
+class OZ2SchemaError(OZ2DataError):
+    """The OZ 2.0 file parsed but does not match its pinned structure: column
+    count, header strings, row-count floor, a cell outside the {0, 1} allowlist,
+    or — the check with no analogue on the NMTC side — a GEOID SCHEME that is not
+    the one the binding declares. See ``schema.OZ2_TRACT_BINDING``.
+
+    Scheme is checked because basis year cannot see the difference: the CDFI Fund
+    NMTC table and this file are BOTH 2020-basis and both say "2020", and they
+    are nonetheless disjoint in Connecticut. Scheme strictly dominates basis."""
+
+
 class GeocoderError(NMTCMapperError):
     """Address-to-census-tract resolution failed (0.4.0).
 
@@ -124,6 +160,10 @@ __all__ = [
     "OZDataError",
     "OZDownloadError",
     "OZParseError",
+    "OZ2DataError",
+    "OZ2DownloadError",
+    "OZ2ParseError",
+    "OZ2SchemaError",
     "GeocoderError",
     "GeocoderTransportError",
     "AmbiguousAddressError",

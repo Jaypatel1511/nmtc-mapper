@@ -21,6 +21,18 @@ from nmtcmapper.eligibility.checker import (
 )
 from nmtcmapper.mapper import NMTCMapper
 
+# 0.6.0: hand-built NMTCMapper instances need the OZ 2.0 table too. An EMPTY
+# frame, not the sample: these tests assert on the NMTC/OZ-1.0 surfaces, and an
+# empty OZ 2.0 universe makes every OZ 2.0 answer `not-determined`, which is the
+# correct reading of "this test supplied no OZ 2.0 data" rather than a fabricated
+# one. The columns are named so a lookup raises KeyError if the shape drifts.
+_EMPTY_OZ2 = pd.DataFrame(
+    {"oz2_nomination_eligible": [], "oz2_rural_area_qoz": [],
+     "oz2_inputs_missing": []},
+    index=pd.Index([], name="tract_id", dtype=object),
+)
+
+
 
 # ── the two indeterminate branches return None, not False ────────────────────
 
@@ -98,6 +110,7 @@ def test_oz_membership_is_keyed_on_the_set_not_on_tract_found(mapper):
     m = NMTCMapper.__new__(NMTCMapper)
     m._table = mapper._table.drop(index=["17031840100"])   # designated, now absent
     m._oz_tracts = mapper._oz_tracts
+    m._oz2_table = _EMPTY_OZ2
     m.data_source = "test"
     r = m.check_tract("17031840100")
     assert r.tract_found is False
@@ -298,6 +311,7 @@ def test_live_oz_partition_and_carve_out():
     oz = load_opportunity_zones()
     m = NMTCMapper.__new__(NMTCMapper)
     m._table, m._oz_tracts, m.data_source = table, oz, "cdfi_fund"
+    m._oz2_table = _EMPTY_OZ2
 
     designated = oz & set(table.index)
     assert len(table) == 85_395
@@ -490,6 +504,7 @@ def test_found_tract_with_null_demographics_renders_not_available(capsys):
     t = _table_with_null_demographics()
     m = NMTCMapper.__new__(NMTCMapper)
     m._table, m._oz_tracts, m.data_source = t, set(), "test"
+    m._oz2_table = _EMPTY_OZ2
     r = m.check_tract("01003990000")
     assert r.tract_found is True
     assert r.eligibility_status == "verified-ineligible"
@@ -510,6 +525,7 @@ def test_the_two_kinds_of_missing_use_two_different_words(capsys):
     t = _table_with_null_demographics()
     m = NMTCMapper.__new__(NMTCMapper)
     m._table, m._oz_tracts, m.data_source = t, set(), "test"
+    m._oz2_table = _EMPTY_OZ2
 
     m.check_tract("01003990000").summary()
     found = capsys.readouterr().out
@@ -525,6 +541,7 @@ def test_a_real_value_still_renders_as_a_percentage(capsys):
     t = _table_with_null_demographics()
     m = NMTCMapper.__new__(NMTCMapper)
     m._table, m._oz_tracts, m.data_source = t, set(), "test"
+    m._oz2_table = _EMPTY_OZ2
     m.check_tract("01003990001").summary()
     out = capsys.readouterr().out
     assert "Poverty Rate:     25.0%" in out
@@ -560,6 +577,7 @@ def test_the_metric_lines_are_never_silently_omitted(capsys):
     t = _table_with_null_demographics()
     m = NMTCMapper.__new__(NMTCMapper)
     m._table, m._oz_tracts, m.data_source = t, set(), "test"
+    m._oz2_table = _EMPTY_OZ2
     for tid in ("01003990000", "01003990001", "99999999999"):
         m.check_tract(tid).summary()
         out = capsys.readouterr().out
@@ -645,6 +663,7 @@ def test_live_no_found_tract_renders_nan(capsys):
     table = load_eligibility_table()
     m = NMTCMapper.__new__(NMTCMapper)
     m._table, m._oz_tracts, m.data_source = table, set(), "cdfi_fund"
+    m._oz2_table = _EMPTY_OZ2
 
     null_pov = table.index[table["poverty_rate"].isna()]
     null_ami = table.index[table["ami_ratio"].isna()]
@@ -668,6 +687,7 @@ def test_live_pct_of_determined_on_a_real_mixed_frame(capsys):
     table = load_eligibility_table()
     m = NMTCMapper.__new__(NMTCMapper)
     m._table, m._oz_tracts, m.data_source = table, set(), "cdfi_fund"
+    m._oz2_table = _EMPTY_OZ2
 
     eligible_tid = table.index[table["nmtc_eligible"]][0]
     ineligible_tid = table.index[~table["nmtc_eligible"]][0]

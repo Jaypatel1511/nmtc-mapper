@@ -14,6 +14,7 @@ from nmtcmapper.exceptions import (
     EligibilityDataError, EligibilityDownloadError, EligibilityParseError,
     EligibilitySchemaError, EligibilityValueError,
     OZDataError, OZDownloadError, OZParseError,
+    OZ2DataError, OZ2DownloadError, OZ2ParseError, OZ2SchemaError,
 )
 from nmtcmapper.data.schema import (
     CACHE_DIR, CDFI_FUND_LIC_URL_2020,
@@ -27,6 +28,9 @@ from nmtcmapper.data.schema import (
     SEVERE_UNEMPLOYMENT_MULTIPLIER, NATIONAL_UNEMPLOYMENT_RATE,
     DEEP_POVERTY_THRESHOLD, DEEP_AMI_THRESHOLD,
     DEEP_UNEMPLOYMENT_MULTIPLIER,
+    OZ2_URL, OZ2_SHEET, OZ2_COLUMN_COUNT, OZ2_EXPECTED_HEADERS,
+    OZ2_MIN_ROWS, OZ2_FLAG_ALLOWED, OZ2_TRACT_BINDING,
+    OZ2_ELIGIBLE_LIC_COLUMN, OZ2_RURAL_STATUS_COLUMN,
 )
 
 
@@ -726,3 +730,246 @@ def _sample_oz_tracts() -> set:
         "13121010400",  # Atlanta
         "48113010900",  # Dallas
     }
+
+
+# ── OZ 2.0 nomination eligibility (0.6.0) ─────────────────────────────────────
+#
+# A SECOND SOURCE ON A SECOND SCHEME. Everything below is deliberately parallel
+# to — and never shared with — the NMTC path above. See docs/oz2-methodology.md.
+#
+# WHY THERE IS NO SHARED, PARAMETERISED "LIC" HELPER between the two paths, and
+# why there must never be one: OZ 2.0 and NMTC are structurally different tests.
+# § 1400Z-1(c)(1) no longer cross-references § 45D(e) at all —
+#
+#     income threshold      NMTC 80%            OZ 2.0 70%
+#     metro benchmark       GREATER of state    metro MFI only
+#                           or metro MFI
+#     non-metro benchmark   statewide MFI       statewide MFI
+#     poverty path          >=20%, standalone   >=20% AND MFI <=125%
+#
+# — two independent tightenings, not one. Adding a `threshold=0.70` argument to
+# anything that also serves NMTC would be the defect this note exists to prevent.
+#
+# IN PRACTICE THE CONSTRAINT DOES NOT BIND HERE, and saying so is more useful than
+# an abstraction built to satisfy it: this loader READS Treasury's published
+# `eligible_lic` column. It does not compute the OZ 2.0 LIC test at all, so there
+# is no threshold to share and no helper to parameterise. The constraint is
+# recorded because it binds hard on anyone who later tries to *compute* this test.
+
+OZ2_CACHE_FILENAME = "OZ2_Eligible_LIC_Tracts_Treasury.xlsx"
+
+
+def _oz2_cache_path() -> Path:
+    return _cache_path(OZ2_CACHE_FILENAME)
+
+
+def download_oz2_file(force: bool = False) -> Path:
+    """Download Treasury's OZ 2.0 data-transparency file, atomically."""
+    path = _oz2_cache_path()
+    if path.exists() and not force:
+        print(f"Using cached OZ 2.0 file: {path}")
+        return path
+    print("Downloading OZ 2.0 eligibility file from Treasury...")
+    tmp = path.with_suffix(path.suffix + ".part")
+    try:
+        response = requests.get(OZ2_URL, stream=True, timeout=120)
+        response.raise_for_status()
+        with open(tmp, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        # Same pre-replace guard as both existing download paths: an HTTP 200
+        # carrying an HTML maintenance page must never reach the cache.
+        try:
+            _validated_workbook_bytes(tmp, OZ2_URL)
+        except EligibilityDownloadError as e:
+            tmp.unlink(missing_ok=True)
+            raise OZ2DownloadError(str(e)) from e
+        tmp.replace(path)
+        print(f"Saved to {path}")
+        return path
+    except requests.exceptions.HTTPError as e:
+        tmp.unlink(missing_ok=True)
+        status = getattr(e.response, "status_code", None)
+        if status == 404:
+            reason = ("not found (404) — Treasury moved this file once already; "
+                      "oz-tracker's URL for it is a 404 for exactly this reason")
+        elif status == 403:
+            reason = "access blocked (403 Forbidden)"
+        else:
+            reason = f"HTTP {status}"
+        raise OZ2DownloadError(
+            f"Failed to download the OZ 2.0 eligibility file from {OZ2_URL}: {reason}"
+        ) from e
+    except requests.exceptions.RequestException as e:
+        tmp.unlink(missing_ok=True)
+        raise OZ2DownloadError(
+            f"Failed to download the OZ 2.0 eligibility file from {OZ2_URL}: "
+            f"connection/DNS/timeout error ({type(e).__name__}: {e})"
+        ) from e
+
+
+def _validate_oz2_header(header_vals: list) -> None:
+    """Exact-match all twelve headers, in order. Raises OZ2SchemaError."""
+    if len(header_vals) != OZ2_COLUMN_COUNT:
+        raise OZ2SchemaError(
+            f"OZ 2.0 sheet {OZ2_SHEET!r} has {len(header_vals)} columns, expected "
+            f"{OZ2_COLUMN_COUNT}. Treasury has changed the file's shape; every "
+            f"column binding below is now unverified."
+        )
+    got = tuple(_normalize_header(v) for v in header_vals)
+    want = tuple(_normalize_header(v) for v in OZ2_EXPECTED_HEADERS)
+    if got != want:
+        diffs = [
+            f"    {i}: expected {w!r}\n       live     {g!r}"
+            for i, (w, g) in enumerate(zip(want, got)) if w != g
+        ]
+        raise OZ2SchemaError(
+            "OZ 2.0 file header mismatch — Treasury has re-published this file "
+            "with a different layout.\n" + "\n".join(diffs)
+        )
+
+
+def _blank(v) -> bool:
+    """True for a Treasury blank: an empty cell or a whitespace-only string."""
+    return v is None or (isinstance(v, str) and not v.strip())
+
+
+def load_oz2_table(force: bool = False) -> pd.DataFrame:
+    """Load Treasury's OZ 2.0 table, indexed by 11-digit GEOID.
+
+    Columns:
+      ``oz2_nomination_eligible``  bool  — Treasury's ``eligible_lic``, 1/0
+      ``oz2_rural_area_qoz``       Optional[bool] — ``rural_status``, RESTRICTED
+                                   to ``eligible_lic == 1``; None otherwise
+      ``oz2_inputs_missing``       bool  — both poverty_rate AND mfi_ratio blank
+
+    THE RURAL RESTRICTION IS DELIBERATE AND IS NOT A CONVENIENCE. Treasury
+    populates ``rural_status`` for all 85,529 rows, but its rural methodology
+    documents the determination over ELIGIBLE tracts only ("...which census
+    tracts eligible to be nominated as 2027 QOZs ... are comprised entirely of a
+    rural area"). A populated column is not a published determination. Exposing
+    the other 20,377 rural-flagged-but-ineligible rows would be the same
+    inference the methodology forbids for the Appendix — "it has a lot of rows,
+    therefore it is authoritative".
+
+    ``oz2_inputs_missing`` HAS NO ANALOGUE UPSTREAM AND IS NOT IN THE METHODOLOGY.
+    It was found by execution while building this release, and it matters because
+    Treasury's 0 is not one fact. See ``EligibilityResult.oz2_nomination_status``.
+    """
+    path = download_oz2_file(force=force)
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        try:
+            if OZ2_SHEET not in wb.sheetnames:
+                raise OZ2ParseError(
+                    f"OZ 2.0 file {path} has no sheet named {OZ2_SHEET!r} "
+                    f"(sheets present: {wb.sheetnames})."
+                )
+            rows = wb[OZ2_SHEET].iter_rows(values_only=True)
+            header = list(next(rows))
+            _validate_oz2_header(header)
+            idx = {name: i for i, name in enumerate(OZ2_EXPECTED_HEADERS)}
+            g_i = idx[OZ2_TRACT_BINDING.table_geoid_header]
+            lic_i, rur_i = idx[OZ2_ELIGIBLE_LIC_COLUMN], idx[OZ2_RURAL_STATUS_COLUMN]
+            pov_i, mfr_i = idx["poverty_rate"], idx["mfi_ratio"]
+
+            geoids, elig, rural, missing = [], [], [], []
+            for n, row in enumerate(rows, start=1):
+                if row[g_i] is None:
+                    continue
+                # Treasury stores states 01-09 as zero-padded STRINGS and 10+ as
+                # INTs (15,662 / 69,867 live). Both normalise to the same 11-digit
+                # key under the loader's existing rule; without the zfill every
+                # tract in states 01-09 would silently miss.
+                raw = str(row[g_i]).strip()
+                if raw.endswith(".0"):
+                    raw = raw[:-2]
+                geoid = raw.zfill(11)
+                for col_i, label in ((lic_i, OZ2_ELIGIBLE_LIC_COLUMN),
+                                     (rur_i, OZ2_RURAL_STATUS_COLUMN)):
+                    val = row[col_i]
+                    if val not in OZ2_FLAG_ALLOWED:
+                        raise OZ2SchemaError(
+                            f"OZ 2.0 column {label!r} carries {val!r} at data row "
+                            f"{n} (GEOID {geoid}), which is outside the allowed "
+                            f"{sorted(OZ2_FLAG_ALLOWED)}. A value this guard does "
+                            f"not recognise would parse falsy and become a "
+                            f"FABRICATED NEGATIVE."
+                        )
+                is_elig = bool(row[lic_i])
+                geoids.append(geoid)
+                elig.append(is_elig)
+                # Restricted here, at the single point of construction, so no
+                # consumer can reach an unrestricted rural flag at all.
+                rural.append(bool(row[rur_i]) if is_elig else None)
+                missing.append(_blank(row[pov_i]) and _blank(row[mfr_i]))
+        finally:
+            wb.close()
+    except OZ2DataError:
+        raise
+    except ImportError:
+        raise
+    except Exception as e:
+        raise OZ2ParseError(
+            f"Failed to parse the OZ 2.0 file {path}: {type(e).__name__}: {e}"
+        ) from e
+
+    if len(geoids) < OZ2_MIN_ROWS:
+        raise OZ2SchemaError(
+            f"OZ 2.0 file {path} yielded only {len(geoids):,} rows (floor is "
+            f"{OZ2_MIN_ROWS:,}). A degenerate parse must raise, never produce a "
+            f"table in which every real tract reads as absent."
+        )
+    # THE CHECK TractVintage CANNOT PERFORM. Derived from the table's own keys and
+    # asserted against the declaration — not read back off the declaration.
+    OZ2_TRACT_BINDING.validate_table_scheme(geoids)
+
+    # NOTE: plain lists, never pd.Series here. A Series carries its own
+    # RangeIndex, and DataFrame(index=...) REINDEXES it against the GEOIDs
+    # instead of labelling it — which silently turns every rural value into NaN.
+    # Caught by execution while building this release, not by review.
+    df = pd.DataFrame(
+        {
+            "oz2_nomination_eligible": elig,
+            "oz2_rural_area_qoz": rural,
+            "oz2_inputs_missing": missing,
+        },
+        index=pd.Index(geoids, name="tract_id"),
+    )
+    df["oz2_rural_area_qoz"] = df["oz2_rural_area_qoz"].astype(object)
+    if df.index.has_duplicates:
+        dupes = df.index[df.index.duplicated()].unique().tolist()[:5]
+        raise OZ2SchemaError(
+            f"OZ 2.0 file {path} carries duplicate GEOIDs (e.g. {dupes}). The "
+            f"key is not unique, so no lookup against it is well-defined."
+        )
+    print(f"OZ 2.0 tracts loaded: {len(df):,}")
+    return df
+
+
+def _sample_oz2_table() -> pd.DataFrame:
+    """Synthetic OZ 2.0 rows for ``NMTCMapper.from_sample()`` — NEVER a real answer.
+
+    Deliberately keyed on the COG scheme so the sample cannot be joined against
+    the NMTC sample's legacy CT keys by accident, and carries at least one row of
+    every answer the real table can produce, including the no-inputs row.
+    """
+    rows = [
+        # geoid,          eligible, rural_status, inputs_missing
+        ("09110990100",   True,  True,  False),   # eligible + rural (CT, COG scheme)
+        ("17031840100",   True,  False, False),   # eligible, not rural
+        ("36061015900",   False, False, False),   # measured ineligible
+        ("48113010900",   False, True,  False),   # ineligible but rural-flagged -> None
+        ("06037990100",   False, False, True),    # published 0 with NO inputs at all
+    ]
+    df = pd.DataFrame(
+        {
+            "oz2_nomination_eligible": [r[1] for r in rows],
+            "oz2_rural_area_qoz": [r[2] if r[1] else None for r in rows],
+            "oz2_inputs_missing": [r[3] for r in rows],
+        },
+        index=pd.Index([r[0] for r in rows], name="tract_id"),
+    )
+    df["oz2_rural_area_qoz"] = df["oz2_rural_area_qoz"].astype(object)
+    return df

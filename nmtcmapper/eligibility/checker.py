@@ -5,7 +5,43 @@ from dataclasses import dataclass
 from typing import Optional
 import pandas as pd
 
-from nmtcmapper.data.schema import DISTRESS_LEVELS
+from nmtcmapper.data.schema import (
+    DISTRESS_LEVELS, CT_LEGACY_COUNTY_PREFIXES,
+    DECIA_TERRITORY_STATE_FIPS, DECIA_TERRITORY_NAMES,
+    DECIA_ISLAND_AREAS_FILE_TITLE,
+)
+
+# The "not covered" block, rendered once and shared by both status ladders so
+# the wording cannot drift between check_address() and enrich_dataframe().
+NOT_COVERED_DESCRIPTION = (
+    "Not covered — outside this table's universe, NOT a lookup miss"
+)
+
+
+def _decia_territory_name(tract_id) -> Optional[str]:
+    """The jurisdiction name when a GEOID is in a DECIA territory, else None.
+
+    Keyed on the state FIPS prefix. Puerto Rico (72) deliberately returns None:
+    PR IS in the loaded table's universe, so a PR miss is a real lookup miss.
+
+    ONLY a well-formed 11-digit GEOID can carry a territory claim. Without the
+    length guard, a leading-zero-stripped California id — "6037101110" or the
+    int 6037101110, the shape Excel and CSV emit — slices to "60" and is told
+    it is American Samoa: 8,707 tracts on the live table, every one in
+    California. That input is a malformed id, and for a malformed id the true
+    answer is the vague one, ``not-found`` (README, Known limitations). No
+    normalization here: zfill would change answers for every caller who gets
+    ``not-found`` today, and is 0.7.0 work with its own methodology.
+    """
+    if tract_id is None:
+        return None
+    s = str(tract_id)
+    if len(s) != 11 or not s.isdigit():
+        return None   # not a well-formed GEOID: no territory claim is possible
+    fips = s[:2]
+    if fips in DECIA_TERRITORY_STATE_FIPS:
+        return DECIA_TERRITORY_NAMES[fips]
+    return None
 
 
 def _tri(value: Optional[bool]) -> str:
@@ -103,6 +139,25 @@ class EligibilityResult:
       ``pd.isna(r.poverty_rate)`` for "no number available either way", and
       ``eligibility_status`` to tell which kind. ``summary()`` prints two
       different words for the two states (0.5.0).
+    - ``is_oz2_nomination_eligible`` and ``is_rural_area_qoz_eligible`` are
+      ``Optional[bool]`` sourced from Treasury's OZ 2.0 data-transparency file.
+      **THIS RESULT NOW CARRIES TWO FIELDS WHOSE NAMES BOTH START "OZ" AND WHOSE
+      ``False`` MEAN OPPOSITE THINGS.** ``is_opportunity_zone`` is OZ 1.0 and can
+      never return ``False`` at all; ``is_oz2_nomination_eligible`` is OZ 2.0 and
+      its ``False`` is a real published fact about 60,197 tracts. They are
+      different programs on different tract schemes: OZ 1.0 designations are
+      2010-basis, OZ 2.0 eligibility is 2020-basis on the 2024 TIGER vintage.
+      Neither field is a substitute for the other and no code should treat them
+      as versions of one answer. Read ``opportunity_zone_status`` and
+      ``oz2_nomination_status``.
+
+      Nothing here is a DESIGNATION. No tract has been designated a 2027 QOZ and
+      none can be yet: nominations close 2026-09-28 (2026-10-28 with the
+      §1400Z-1(b)(2) extension) and the Secretary's consideration period runs to
+      2026-12-28 at the latest. ``True`` means "eligible to be nominated", and a
+      State may designate only 25% of its LICs (25 tracts where it has fewer than
+      100), so a State's eligible tracts materially exceed what it may ever
+      designate. ``True`` is not "will be an OZ".
     - ``is_nmtc_native_area`` IS REMOVED. It was never obtainable — the CDFI Fund
       publishes no tract-keyed NMTC native-area resource, and AIANNH entities
       carry four-digit GEOIDs with no state or county component, so they cannot
@@ -135,8 +190,33 @@ class EligibilityResult:
     is_opportunity_zone: Optional[bool] = None
     tract_found: bool = True
 
+    # ── OZ 2.0 nomination eligibility (0.6.0) ────────────────────────────────
+    # A DIFFERENT PROGRAM FROM is_opportunity_zone, WITH THE OPPOSITE False.
+    # Read oz2_nomination_status / rural_area_qoz_status, never truthiness.
+    is_oz2_nomination_eligible: Optional[bool] = None
+    is_rural_area_qoz_eligible: Optional[bool] = None
+    # PROVENANCE, NOT A VERDICT. True when Treasury published eligible_lic = 0
+    # for a tract whose poverty_rate AND mfi_ratio are both blank — i.e. a 0
+    # produced with no measurable input. 1,080 live rows. It qualifies the False
+    # above; it is not itself an eligibility answer. See oz2_nomination_status.
+    oz2_inputs_missing: Optional[bool] = None
+
     @property
     def distress_description(self) -> str:
+        """Human-readable expansion of the result — the SAME string summary()
+        prints on its Description line.
+
+        Selected from ``eligibility_status`` first: a ``not-covered-territory``
+        result reads ``NOT_COVERED_DESCRIPTION`` rather than the "no match /
+        tract absent" wording, because a coverage boundary is not a lookup miss.
+        Selected here, not in summary(), so the two public surfaces cannot
+        disagree on one object — 7d18d7f substituted the wording in summary()
+        only and this property kept saying what the CHANGELOG said was removed.
+        ``distress_level`` stays "unknown": it is a distress vocabulary and a
+        coverage boundary is not a distress finding.
+        """
+        if self.eligibility_status == "not-covered-territory":
+            return NOT_COVERED_DESCRIPTION
         return DISTRESS_LEVELS.get(self.distress_level, "Unknown")
 
     @property
@@ -163,14 +243,97 @@ class EligibilityResult:
         return "not-confirmed"
 
     @property
-    def eligibility_status(self) -> str:
-        """Four-way status distinguishing the indeterminate cases from verdicts.
+    def oz2_nomination_status(self) -> str:
+        """OZ 2.0 nomination-eligibility status. READ THIS, NOT THE BOOLEAN.
 
-        verified-eligible / verified-ineligible / not-found / geocode-failed.
+        eligible-for-nomination / ineligible-on-treasury-inputs /
+        ineligible-no-inputs-published / refused-connecticut-scheme /
+        not-determined / no-tract
+
+        Six values because ``is_oz2_nomination_eligible`` has three and two of
+        them are not one fact each:
+
+        * ``ineligible-on-treasury-inputs`` — Treasury scored the tract on the
+          2020-2024 ACS / 2020 DECIA and published 0. A real published negative.
+        * ``ineligible-no-inputs-published`` — Treasury published 0 for a tract
+          whose poverty_rate AND mfi_ratio are BOTH blank. 1,080 live rows,
+          1,047 of them reachable through this package's own tract universe. The
+          value is still ``False``, because 0 is what Treasury published and this
+          package does not overrule a federal determination — but it is a 0 with
+          nothing behind it, and Treasury's own convention elsewhere in the file
+          proves a missing input does not by itself defeat eligibility (1,068
+          tracts with a blank mfi_ratio and poverty >= 20% were published 1).
+          Callers who must not act on an unmeasured negative switch on THIS.
+        * ``refused-connecticut-scheme`` — the GEOID is a Connecticut LEGACY
+          county key (09001-09015), which is the scheme this package's NMTC table
+          uses and NOT the scheme Treasury's file uses (09110-09190, COG/planning
+          regions). The two are disjoint: zero shared GEOIDs. This is a REFUSAL,
+          said out loud, not a lookup miss — 243 eligible CT tracts and 884 CT
+          tracts overall are unanswerable through the NMTC key, and a silent
+          ``None`` for an entire state is the misdescription this package exists
+          to stop. A CT answer requires a 09110-09190 key.
+        """
+        if self.tract_id is None:
+            return "no-tract"
+        if str(self.tract_id)[:5] in CT_LEGACY_COUNTY_PREFIXES:
+            return "refused-connecticut-scheme"
+        if self.is_oz2_nomination_eligible is None:
+            return "not-determined"
+        if self.is_oz2_nomination_eligible:
+            return "eligible-for-nomination"
+        if self.oz2_inputs_missing:
+            return "ineligible-no-inputs-published"
+        return "ineligible-on-treasury-inputs"
+
+    @property
+    def rural_area_qoz_status(self) -> str:
+        """Rural-area QOZ status. READ THIS, NOT THE BOOLEAN.
+
+        rural-eligible / not-rural-on-treasury-determination /
+        not-determined-not-an-eligible-lic / refused-connecticut-scheme /
+        not-determined / no-tract
+
+        ``not-determined-not-an-eligible-lic`` is its own value because it is the
+        overwhelmingly common ``None`` (60,197 rows) and it is NOT ignorance:
+        Treasury populates rural_status for the whole 85,529-row universe, but
+        its rural methodology determines rural status over ELIGIBLE tracts only.
+        20,377 ineligible tracts carry rural_status = 1 and this package reports
+        none of them, because a populated column is not a published determination.
+        """
+        if self.tract_id is None:
+            return "no-tract"
+        if str(self.tract_id)[:5] in CT_LEGACY_COUNTY_PREFIXES:
+            return "refused-connecticut-scheme"
+        if self.is_rural_area_qoz_eligible is True:
+            return "rural-eligible"
+        if self.is_rural_area_qoz_eligible is False:
+            return "not-rural-on-treasury-determination"
+        if self.is_oz2_nomination_eligible is False:
+            return "not-determined-not-an-eligible-lic"
+        return "not-determined"
+
+    @property
+    def eligibility_status(self) -> str:
+        """Five-way status distinguishing the indeterminate cases from verdicts.
+
+        verified-eligible / verified-ineligible / not-found /
+        not-covered-territory / geocode-failed.
+
+        ``not-covered-territory`` (0.6.0) separates a STRUCTURAL non-coverage
+        from a lookup miss: the four DECIA territories are outside the loaded
+        2016-2020 ACS table's universe entirely, so "not found in the table" is
+        a true statement that misdescribes the situation — there is no retry
+        that helps, the remedy is a different file. See
+        ``DECIA_TERRITORY_STATE_FIPS``. Both remain INDETERMINATE:
+        ``nmtc_eligible`` is None in either case, never False.
         """
         if not self.geocode_success:
             return "geocode-failed"
         if not self.tract_found:
+            # Order matters: after geocode-failed (a territory tract that never
+            # geocoded must report the geocode failure), before the generic miss.
+            if _decia_territory_name(self.tract_id):
+                return "not-covered-territory"
             return "not-found"
         # Guard None FIRST, exactly as summary() does: an indeterminate verdict
         # must never fall through the falsy branch and surface as a fabricated
@@ -186,7 +349,24 @@ class EligibilityResult:
         print(f"  Census Tract:     {self.tract_id or 'Not found'}")
         # Tri-state: an indeterminate result must NOT print "❌ NO". The reason it
         # is unknown is qualified inline on the same line (not in a footer).
-        if self.nmtc_eligible is None:
+        # The Description line is READ from distress_description, never
+        # re-decided here — that property owns the status-first selection.
+        status = self.eligibility_status
+        description = self.distress_description
+        if status == "not-covered-territory":
+            territory = _decia_territory_name(self.tract_id)
+            elig = (
+                # Wrapped so the FULL FILE TITLE survives on one line — a user
+                # has to be able to copy it out and search for it; that title
+                # is the entire remedy this block exists to deliver. It is read
+                # from the schema constant, never retyped here.
+                f"🚫 NOT COVERED — {territory} is outside the 2016-2020 ACS\n"
+                "                    NMTC LIC table this package loads (50 states + DC + PR).\n"
+                "                    Territory LIC status is published separately, in the CDFI Fund's\n"
+                f"                    \"{DECIA_ISLAND_AREAS_FILE_TITLE}\"\n"
+                "                    file. This package does not load it."
+            )
+        elif self.nmtc_eligible is None:
             if not self.geocode_success:
                 elig = "❓ UNKNOWN — address could not be geocoded (indeterminate, NOT ineligible)"
             else:
@@ -197,7 +377,7 @@ class EligibilityResult:
             elig = "❌ NO"
         print(f"  NMTC Eligible:    {elig}")
         print(f"  Distress Level:   {self.distress_level.upper()}")
-        print(f"  Description:      {self.distress_description}")
+        print(f"  Description:      {description}")
         # Three-branch switch via _pct(), printed unconditionally — see _pct's
         # docstring. `is not None` was the wrong sentinel: the loader's None
         # becomes NaN inside the DataFrame, NaN is not None, and 1,583 poverty /
@@ -228,6 +408,51 @@ class EligibilityResult:
             oz_line = "❓ UNKNOWN — no census tract resolved"
         print(f"  Opportunity Zone: {oz_line}")
         print(f"  High Migration:   {_tri(self.is_high_migration_rural)}")
+        # OZ 2.0 — switched on the status string for the same reason the OZ 1.0
+        # line is: a ternary on the value would print "No" for every indeterminate
+        # and refused tract. The Connecticut refusal is printed IN FULL rather
+        # than collapsed into "unknown"; a silent None for an entire state is the
+        # failure this block exists to prevent.
+        oz2 = self.oz2_nomination_status
+        oz2_line = {
+            "eligible-for-nomination":
+                "✅ YES — eligible to be NOMINATED as a 2027 QOZ (not designated;\n"
+                "                    no tract is designated yet)",
+            "ineligible-on-treasury-inputs":
+                "❌ NO — not an eligible LIC on the 2020-2024 ACS / 2020 DECIA\n"
+                "                    inputs Treasury used",
+            "ineligible-no-inputs-published":
+                "❌ NO (published) — but Treasury had NO poverty and NO income\n"
+                "                    data for this tract; the 0 has nothing behind it",
+            "refused-connecticut-scheme":
+                "🚫 REFUSED — Connecticut legacy county key (09001-09015).\n"
+                "                    Treasury keys CT on COG/planning regions\n"
+                "                    (09110-09190); the two share ZERO GEOIDs. Supply\n"
+                "                    a 09110-09190 key for a Connecticut answer.",
+            "not-determined":
+                "❓ NOT DETERMINED — tract absent from Treasury's 85,529-row universe",
+            "no-tract":
+                "❓ UNKNOWN — no census tract resolved",
+        }[oz2]
+        print(f"  OZ 2.0 Eligible:  {oz2_line}")
+        rural = self.rural_area_qoz_status
+        rural_line = {
+            "rural-eligible":
+                "✅ YES — Treasury determined this eligible tract is comprised\n"
+                "                    entirely of a rural area",
+            "not-rural-on-treasury-determination":
+                "❌ NO — eligible, but not comprised entirely of a rural area",
+            "not-determined-not-an-eligible-lic":
+                "❓ NOT DETERMINED — Treasury determines rural status only for\n"
+                "                    ELIGIBLE tracts, and this tract is not one",
+            "refused-connecticut-scheme":
+                "🚫 REFUSED — Connecticut legacy county key (see above)",
+            "not-determined":
+                "❓ NOT DETERMINED — tract absent from Treasury's universe",
+            "no-tract":
+                "❓ UNKNOWN — no census tract resolved",
+        }[rural]
+        print(f"  Rural-Area QOZ:   {rural_line}")
         print()
 
 
@@ -319,8 +544,10 @@ def enrich_dataframe(
 
     for col in eligibility_cols:
         df[col] = None
-    # Additive column (0.4.0) distinguishing the four outcomes:
-    # verified-eligible / verified-ineligible / not-found / geocode-failed.
+    # Additive column (0.4.0; a fifth value added in 0.6.0) distinguishing
+    # the outcomes:
+    # verified-eligible / verified-ineligible / not-found /
+    # not-covered-territory / geocode-failed.
     df["eligibility_status"] = None
 
     for idx, row in df.iterrows():
@@ -338,7 +565,14 @@ def enrich_dataframe(
         for col, val in result.items():
             df.at[idx, col] = val
         if not found:
-            df.at[idx, "eligibility_status"] = "not-found"
+            # SECOND, INDEPENDENT status ladder — it must stay in lockstep with
+            # EligibilityResult.eligibility_status. Fixing only the property
+            # would make check_address() say not-covered-territory while this
+            # path said not-found for the same GEOID.
+            df.at[idx, "eligibility_status"] = (
+                "not-covered-territory" if _decia_territory_name(tract_id)
+                else "not-found"
+            )
         elif result["nmtc_eligible"]:
             df.at[idx, "eligibility_status"] = "verified-eligible"
         else:

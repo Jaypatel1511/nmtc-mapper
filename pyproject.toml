@@ -1,14 +1,20 @@
 [build-system]
-requires = ["setuptools>=42", "wheel"]
+# setuptools>=77 for PEP 639 (`license` as an SPDX expression +
+# `license-files`). The old table form is deprecated portfolio-wide, with
+# removal announced 2027-02-18. VERIFIED, not assumed:
+# setuptools 77.0.3, 78.1.1 and 80.9.0 all declare Requires-Python >=3.9,
+# so raising this floor does not conflict with this package's 3.9 floor.
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "nmtc-mapper"
-version = "0.5.0"
+version = "0.6.0"
 description = "Automated NMTC eligibility checker — geocode addresses and check Low-Income Community status using CDFI Fund and Census data"
 readme = "README.md"
 requires-python = ">=3.9"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{name = "Jay Patel", email = "thejaypatel1511@gmail.com"}]
 dependencies = [
     "aiohttp>=3.8.0",
@@ -24,7 +30,11 @@ dependencies = [
 dev = ["pytest>=7.0"]
 
 [project.urls]
-Homepage = "https://github.com/Jaypatel1511/nmtc-mapper"
+Homepage = "https://jaypatel1511.github.io/cdfi-superpowers/"
+Repository = "https://github.com/Jaypatel1511/nmtc-mapper"
+Documentation = "https://github.com/Jaypatel1511/nmtc-mapper#readme"
+Issues = "https://github.com/Jaypatel1511/nmtc-mapper/issues"
+Changelog = "https://github.com/Jaypatel1511/nmtc-mapper/blob/main/CHANGELOG.md"
 
 # Explicit discovery: the repo root also contains a generated `site/` (mkdocs
 # output) and `docs/`, `examples/` dirs. With the setup.py pin removed, build-time
