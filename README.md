@@ -32,7 +32,8 @@ addresses and get results in seconds, using the same official data source.
 > than losing truth. A genuine no-match is *not* a failure and does not abort; it
 > yields `eligibility_status = "geocode-failed"` for that row alone. Per-row
 > failure capture needs a designed contract (which column carries the error, how
-> `eligibility_status` reports transport failure vs no-match) and is **0.6.0's**.
+> `eligibility_status` reports transport failure vs no-match) and is **0.7.0's** —
+> not shipped yet.
 
 ---
 
@@ -386,7 +387,7 @@ all — and removes nothing you passed in:
 | `is_high_migration_rural` | `Optional[bool]` | `None` only when no row was read |
 | `severe_distress` | `Optional[bool]` | `None` only when no row was read |
 | `deep_distress` | `Optional[bool]` | `None` only when no row was read |
-| `eligibility_status` | `str` | `verified-eligible` / `verified-ineligible` / `not-found` / `not-covered-territory` / `geocode-failed` |
+| `eligibility_status` | `str` | `verified-eligible` / `verified-ineligible` / `not-found` / `not-covered-territory` / `geocode-failed` — the vocabulary is exported as `nmtcmapper.ELIGIBILITY_STATUS_VALUES`, in this order |
 
 The four `Optional[bool]` columns are `None` **exactly** when `eligibility_status`
 is `not-found`, `not-covered-territory`, or `geocode-failed`. For a found tract
@@ -481,12 +482,16 @@ compute it, not because the criterion is unimportant. Use CIMS.
 applies no normalization while both internal tables are `zfill(11)`-ed, so
 `"1013953500"` — the standard form out of Excel and CSV — misses. It fails safe
 (`nmtc_eligible = None`, never a fabricated `False`), but it is the most likely
-real-world input error. Pass `str(geoid).zfill(11)` until **0.6.0** normalizes it.
+real-world input error. Pass `str(geoid).zfill(11)` yourself. Normalization is
+**0.7.0**, together with the item below, under one audited methodology for input
+that was never a GEOID. This release does not normalize, and a malformed id is
+never told it is a territory (a stripped California id starts with `60`, American
+Samoa's FIPS; only a well-formed 11-digit GEOID can carry a territory claim).
 
 **`opportunity_zone_status` says `not-confirmed` for input that was never a
 GEOID.** `eligibility_status` correctly reports `not-found`, but the OZ property
 tests only whether `tract_id is None`, so junk input takes the `not-confirmed`
-branch. **0.6.0.**
+branch. **0.7.0**, with the normalization item above — one piece of work.
 
 ---
 
@@ -513,14 +518,15 @@ those changes must not move.
     # docs-check: skip shell command; the suite is run by CI, not by this gate
     PYTHONPATH=. pytest tests/ -v
 
-302 tests across all modules (including fail-loud, explicit-sample-mode,
+355 tests across all modules (including fail-loud, explicit-sample-mode,
 tri-state eligibility, fabricated-negative, null-sentinel-rendering,
 percentage-denominator, bool-coercion, exception-hierarchy-shape,
 cell-value-allowlist, async-batch, cache-poisoning, schema-drift, OZ 2.0
-answer-space, GEOID-scheme-discriminator, DECIA-territory-coverage and
+answer-space, GEOID-scheme-discriminator, DECIA-territory-coverage,
+malformed-GEOID-shape, forward-version-promise, docs-check-tool and
 AST-vacuity coverage).
-27 of these are `@live` tests that hit the real CDFI Fund / Census / Treasury
-endpoints; CI deselects them with `-m "not live"`, leaving 275 offline.
+28 of these are `@live` tests that hit the real CDFI Fund / Census / Treasury
+endpoints; CI deselects them with `-m "not live"`, leaving 327 offline.
 
 ---
 

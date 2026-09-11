@@ -49,6 +49,13 @@ MUTATIONS (all observed red before this shipped, each at exactly one test):
     test_every_none_exactly_when_sentence_names_every_indeterminate_status[README.md]
   - remove `not-covered-territory` from ELIGIBILITY_STATUS_VALUES with the
     code untouched -> 11 red, led by the two emits-exactly gates (section 1)
+  - FIX4 F6, the two shapes the 0.6.0 gate was BLIND to (both were green):
+      * README.md's opening list cut to THREE values -> red at
+        test_the_enumeration_is_stated_in_full_somewhere_in_each_site[README.md]
+      * "None **exactly** when" paraphrased to "**precisely**" and
+        `not-covered-territory` dropped from the sentence -> red at
+        test_every_none_contract_paragraph_names_every_indeterminate_status[README.md]
+        and at the stated-in-full gate (a two-value run is not a complete claim)
 """
 import ast
 import io
@@ -90,8 +97,33 @@ _COUNT_BESIDE_NOUN = re.compile(
 # status value and still be "beside the enumeration".
 _ADJACENCY = 250
 
-_INDETERMINATE_CONTRACT = re.compile(
-    r"None`? \**exactly\** when|no row was read", re.I)
+# FIX4 F6: the contract locator is anchored on the STATUS VALUES and the `None`
+# token, not on an adverb. The 0.6.0 gate keyed on "None exactly when", so
+# rewriting "exactly" as "precisely" and dropping a value from the sentence
+# went green — the sentence the module exists to guard rotted on one word.
+# Now: any paragraph naming >= 2 statuses that also states the None contract
+# (the token `None` in any of its markdown/docstring spellings) is held to it.
+_NONE_TOKEN = re.compile(r"(?<![\w.])None(?![\w.])")
+
+# A LISTING of statuses: two or more values joined only by list punctuation
+# (`/`, `,`, "or", "and", quotes/backticks/asterisks). A narrative that names
+# two values in prose ("say X while this path said Y") is not a listing and is
+# not inspected; a list-shaped run IS an enumeration claim, at ANY length.
+_STATUS_TOKEN = r"[`'\"*]*(?:" + "|".join(
+    re.escape(v) for v in ELIGIBILITY_STATUS_VALUES) + r")[`'\"*]*"
+_STATUS_RUN = re.compile(
+    _STATUS_TOKEN + r"(?:(?:\s*(?:[,/]|\bor\b|\band\b))*\s*" + _STATUS_TOKEN + r")+")
+
+
+def _status_runs(paragraph):
+    """Every list-shaped run of >= 2 status values in one collapsed paragraph,
+    each as (the run text, the set of values it names)."""
+    runs = []
+    for m in _STATUS_RUN.finditer(paragraph):
+        named = frozenset(v for v in ELIGIBILITY_STATUS_VALUES if v in m.group(0))
+        if len(named) >= 2:
+            runs.append((m.group(0), named))
+    return runs
 
 
 def _collapse(text):
@@ -268,19 +300,36 @@ def test_every_statement_site_names_every_value(site):
 
 
 @pytest.mark.parametrize("site", _STATEMENT_SITES)
-def test_the_enumeration_is_stated_in_full_somewhere_in_each_site(site):
+def test_the_enumeration_is_stated_in_full_somewhere_in_each_site(
+        site, sample_table):
     """Naming every value SOMEWHERE in a file is weaker than listing them
     together: a site could mention the fifth value in a footnote and still
-    carry a four-item list. At least one paragraph per site must carry the
-    whole enumeration, and every paragraph that carries most of it must carry
-    all of it — a four-of-five list is exactly the stale-copy shape."""
+    carry a four-item list. At least one listing per site must carry the
+    whole enumeration, and EVERY listing must be a complete claim.
+
+    FIX4 F6: the 0.6.0 gate inspected only paragraphs naming >= 4 values, so a
+    copy cut to THREE was invisible while a four-of-five copy failed. Any
+    list-shaped run of >= 2 statuses is now an enumeration claim, and there
+    are exactly two complete claims a listing can make: the full vocabulary,
+    or the indeterminate subset — derived from execution, not typed here,
+    because "None: not-found / not-covered-territory / geocode-failed" is a
+    legitimate three-value list and a two-value cut of it is the stale shape.
+
+    MUTATIONS (both observed red here before this shipped):
+      - README.md's opening list cut to three values -> red for README.md
+      - README.md's biconditional cut to `not-found` or `geocode-failed`
+        (with "exactly" paraphrased as "precisely") -> red for README.md
+    """
+    ind = _indeterminate_statuses(sample_table)
+    full = frozenset(ELIGIBILITY_STATUS_VALUES)
+    assert len(ind) == 3 and ind < full
     paragraphs = _paragraphs(site, _site_text(site))
     assert len(paragraphs) >= 3, f"{site} split into {len(paragraphs)} paragraphs"
-    listing = [p for p in paragraphs
-               if sum(v in p for v in ELIGIBILITY_STATUS_VALUES) >= 4]
-    assert listing, f"{site}: no paragraph lists the enumeration at all (j4)"
-    partial = [p[:160] for p in listing
-               if not set(ELIGIBILITY_STATUS_VALUES) <= {v for v in ELIGIBILITY_STATUS_VALUES if v in p}]
+    runs = [r for p in paragraphs for r in _status_runs(p)]
+    assert runs, f"{site}: no listing of statuses located at all (j4)"
+    complete = [text for text, named in runs if named == full]
+    assert complete, f"{site}: no listing carries the whole enumeration"
+    partial = [text for text, named in runs if named not in (full, ind)]
     assert not partial, f"{site}: stale partial enumeration(s): {partial}"
 
 
@@ -317,32 +366,74 @@ def test_no_count_word_beside_the_enumeration_disagrees_with_it(site):
 # ── 3. the indeterminate contract names every indeterminate status ────────────
 
 @pytest.mark.parametrize("site", _STATEMENT_SITES)
-def test_every_none_exactly_when_sentence_names_every_indeterminate_status(
+def test_every_none_contract_paragraph_names_every_indeterminate_status(
         site, sample_table):
     """The biconditional is the documented way to find indeterminate rows. If
     it names a proper subset, the filter it licenses drops the rest, and the
     surrounding prose then reads their absence as a supportable NO — the
     fabricated-negative class relocated from code into documentation.
 
-    Only paragraphs that state the contract AND name at least one status are
-    held to it; a paragraph that describes the condition in words alone
-    ("the tract is absent from the table") licenses no `isin([...])`.
+    A paragraph is held to the contract when it names >= 2 statuses AND states
+    the `None` contract — anchored on the status values and the `None` token,
+    never on an adverb ("exactly", "precisely", "only", ...), which is what
+    let the 0.6.0 gate go green on a paraphrase (FIX4 F6). A paragraph that
+    describes the condition in words alone ("the tract is absent from the
+    table") licenses no `isin([...])` and is not inspected.
 
-    MUTATION: drop `not-covered-territory` from README.md's "None exactly
-    when" sentence -> red here for README.md."""
+    MUTATION: rewrite README.md's "None **exactly** when" as "**precisely**"
+    AND drop `not-covered-territory` from it -> red here for README.md."""
     ind = _indeterminate_statuses(sample_table)
     assert len(ind) == 3
     paragraphs = _paragraphs(site, _site_text(site))
     contract = [p for p in paragraphs
-                if _INDETERMINATE_CONTRACT.search(p)
-                and sum(v in p for v in ELIGIBILITY_STATUS_VALUES) >= 1]
+                if _NONE_TOKEN.search(p)
+                and sum(v in p for v in ELIGIBILITY_STATUS_VALUES) >= 2]
     # The README and mapper.py are where the sentence lives; the others may
     # legitimately not restate it, but where it IS stated it must be whole.
     if site in ("README.md", "nmtcmapper/mapper.py"):
-        assert len(contract) >= 1, f"{site}: contract sentence not located (j4)"
+        assert len(contract) >= 1, f"{site}: contract paragraph not located (j4)"
     incomplete = []
     for p in contract:
         missing = sorted(v for v in ind if v not in p)
         if missing:
             incomplete.append((missing, p[:200]))
     assert not incomplete, f"{site}: contract names a proper subset: {incomplete}"
+
+
+# ── FIX4 F5: the vocabulary is reachable by the consumers told to switch on it ─
+
+def test_the_vocabulary_is_exported_from_the_top_level():
+    """schema.py calls this "the public vocabulary, stated ONCE" and the README
+    tells consumers to switch on it — so it must be importable without knowing
+    the package's internal layout, and it must be in __all__ so docs_check's
+    assertion 6 holds the README to documenting it."""
+    import nmtcmapper
+    assert "ELIGIBILITY_STATUS_VALUES" in nmtcmapper.__all__
+    from nmtcmapper import ELIGIBILITY_STATUS_VALUES as exported
+    assert exported is ELIGIBILITY_STATUS_VALUES
+
+
+def test_the_readme_documents_the_exported_vocabulary_beside_the_enumeration():
+    text = _site_text("README.md")
+    assert "ELIGIBILITY_STATUS_VALUES" in text
+    # ...and near the status values, not in a footnote.
+    idx = text.index("ELIGIBILITY_STATUS_VALUES")
+    window = text[max(0, idx - 800): idx + 800]
+    assert sum(v in window for v in ELIGIBILITY_STATUS_VALUES) >= 3
+
+
+def test_upgrading_names_the_additive_status_and_the_corrected_membership_test():
+    """`not-covered-territory` is an ADDITIVE PUBLIC ENUM VALUE. A consumer
+    holding `status in {"not-found", "geocode-failed"}` gets False for a
+    territory row and falls into the nmtc_eligible-is-falsy trap — it does not
+    break loudly, which is what UPGRADING is for."""
+    text = _site_text("CHANGELOG.md")
+    start = text.index("### UPGRADING FROM 0.5.0")
+    end = text.index("### ", start + 10)
+    section = _collapse(text[start:end])
+    assert "not-covered-territory" in section
+    assert "ELIGIBILITY_STATUS_VALUES" in section
+    # the corrected membership test names all three indeterminate statuses in
+    # one place
+    for v in ("not-found", "not-covered-territory", "geocode-failed"):
+        assert v in section

@@ -61,7 +61,8 @@ def _forbid_real_data_access(monkeypatch, tmp_path):
 
     LIMIT: the tripwire is planted in `requests` (and, below, the stdlib
     `urllib.request.urlopen`). It proves absence of a call THROUGH THOSE
-    TRANSPORTS only. A future loader that reaches for `httpx`, `aiohttp`, a raw
+    TRANSPORTS only. A loader that reaches for `aiohttp` (already imported by
+    the geocoder for batch work, though no loader uses it), `httpx`, a raw
     socket, or a subprocess walks past it silently — the claim "no network
     call at all" is only as wide as this patch list. When a loader adopts a
     new transport, add it HERE in the same change, or this docstring's claim

@@ -22,7 +22,9 @@ import pathlib
 
 import pytest
 
-TARGETS = ["test_oz2.py", "test_live_oz2_file.py", "test_status_enumeration.py"]
+TARGETS = ["test_oz2.py", "test_live_oz2_file.py", "test_status_enumeration.py",
+           # FIX4: the two new looping gates
+           "test_forward_promises.py", "test_docs_check_tool.py"]
 
 
 def _trees():

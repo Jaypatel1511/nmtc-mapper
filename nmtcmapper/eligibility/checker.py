@@ -8,6 +8,7 @@ import pandas as pd
 from nmtcmapper.data.schema import (
     DISTRESS_LEVELS, CT_LEGACY_COUNTY_PREFIXES,
     DECIA_TERRITORY_STATE_FIPS, DECIA_TERRITORY_NAMES,
+    DECIA_ISLAND_AREAS_FILE_TITLE,
 )
 
 # The "not covered" block, rendered once and shared by both status ladders so
@@ -22,10 +23,22 @@ def _decia_territory_name(tract_id) -> Optional[str]:
 
     Keyed on the state FIPS prefix. Puerto Rico (72) deliberately returns None:
     PR IS in the loaded table's universe, so a PR miss is a real lookup miss.
+
+    ONLY a well-formed 11-digit GEOID can carry a territory claim. Without the
+    length guard, a leading-zero-stripped California id — "6037101110" or the
+    int 6037101110, the shape Excel and CSV emit — slices to "60" and is told
+    it is American Samoa: 8,707 tracts on the live table, every one in
+    California. That input is a malformed id, and for a malformed id the true
+    answer is the vague one, ``not-found`` (README, Known limitations). No
+    normalization here: zfill would change answers for every caller who gets
+    ``not-found`` today, and is 0.7.0 work with its own methodology.
     """
     if tract_id is None:
         return None
-    fips = str(tract_id)[:2]
+    s = str(tract_id)
+    if len(s) != 11 or not s.isdigit():
+        return None   # not a well-formed GEOID: no territory claim is possible
+    fips = s[:2]
     if fips in DECIA_TERRITORY_STATE_FIPS:
         return DECIA_TERRITORY_NAMES[fips]
     return None
@@ -190,6 +203,20 @@ class EligibilityResult:
 
     @property
     def distress_description(self) -> str:
+        """Human-readable expansion of the result — the SAME string summary()
+        prints on its Description line.
+
+        Selected from ``eligibility_status`` first: a ``not-covered-territory``
+        result reads ``NOT_COVERED_DESCRIPTION`` rather than the "no match /
+        tract absent" wording, because a coverage boundary is not a lookup miss.
+        Selected here, not in summary(), so the two public surfaces cannot
+        disagree on one object — 7d18d7f substituted the wording in summary()
+        only and this property kept saying what the CHANGELOG said was removed.
+        ``distress_level`` stays "unknown": it is a distress vocabulary and a
+        coverage boundary is not a distress finding.
+        """
+        if self.eligibility_status == "not-covered-territory":
+            return NOT_COVERED_DESCRIPTION
         return DISTRESS_LEVELS.get(self.distress_level, "Unknown")
 
     @property
@@ -322,26 +349,23 @@ class EligibilityResult:
         print(f"  Census Tract:     {self.tract_id or 'Not found'}")
         # Tri-state: an indeterminate result must NOT print "❌ NO". The reason it
         # is unknown is qualified inline on the same line (not in a footer).
-        # Selected from eligibility_status, not from distress_level: a coverage
-        # boundary is not a distress finding, and adding a DISTRESS_LEVELS entry
-        # for it would push a non-distress value into every consumer that
-        # switches on distress. distress_level stays "unknown".
+        # The Description line is READ from distress_description, never
+        # re-decided here — that property owns the status-first selection.
         status = self.eligibility_status
         description = self.distress_description
         if status == "not-covered-territory":
             territory = _decia_territory_name(self.tract_id)
             elig = (
-                # Wrapped so the FILE NAME survives on one line — a user has to
-                # be able to copy it out and search for it; that name is the
-                # entire remedy this block exists to deliver.
+                # Wrapped so the FULL FILE TITLE survives on one line — a user
+                # has to be able to copy it out and search for it; that title
+                # is the entire remedy this block exists to deliver. It is read
+                # from the schema constant, never retyped here.
                 f"🚫 NOT COVERED — {territory} is outside the 2016-2020 ACS\n"
                 "                    NMTC LIC table this package loads (50 states + DC + PR).\n"
-                "                    Territory LIC status is published separately, in the CDFI\n"
-                "                    Fund's \"NMTC Low-Income Community Census Tracts\n"
-                "                    (2020 Island Areas Decennial Census)\" file. This package\n"
-                "                    does not load it."
+                "                    Territory LIC status is published separately, in the CDFI Fund's\n"
+                f"                    \"{DECIA_ISLAND_AREAS_FILE_TITLE}\"\n"
+                "                    file. This package does not load it."
             )
-            description = NOT_COVERED_DESCRIPTION
         elif self.nmtc_eligible is None:
             if not self.geocode_success:
                 elig = "❓ UNKNOWN — address could not be geocoded (indeterminate, NOT ineligible)"

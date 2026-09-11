@@ -42,6 +42,14 @@ not break loudly.
 | `r.is_oz2_nomination_eligible is False` | — | true for tracts Treasury scored **and** for tracts it had no data for | `r.oz2_nomination_status == "ineligible-on-treasury-inputs"` |
 | treating the two OZ fields as one answer | — | they are different programs on different tract schemes | read both status strings |
 | `df[~df.is_oz2_...]` | — | `TypeError` on an object column holding `None` | filter with `!= True` |
+| `status in {"not-found", "geocode-failed"}` as the indeterminate test | the two indeterminate statuses | **`False` for every territory row** — `not-covered-territory` is a new, additive `eligibility_status` value whose `nmtc_eligible` is `None`, so the row falls through to the falsy-`None` trap | `status in {"not-found", "not-covered-territory", "geocode-failed"}`, or `r.nmtc_eligible is None` |
+
+**`eligibility_status` gained a fifth value, and it is indeterminate.**
+`not-covered-territory` (American Samoa 60, Guam 66, Northern Mariana Islands 69,
+US Virgin Islands 78 — see *Fixed*) does not break loudly: a membership test
+written against the 0.5.0 pair silently classifies a territory row as a verdict.
+The full vocabulary is now exported as `nmtcmapper.ELIGIBILITY_STATUS_VALUES`;
+the indeterminate subset is its last three values.
 
 **Read the status strings, not the booleans.** `oz2_nomination_status` and
 `rural_area_qoz_status` are the supported surface, exactly as
@@ -94,6 +102,79 @@ not break loudly.
   Connecticut rows cannot be classified and is **refused**, not defaulted.
 
 ### Fixed
+
+- **A leading-zero-stripped California GEOID was told it is American Samoa.**
+  The territory check sliced two characters off whatever it was handed, with no
+  length check. `"6037101110"` — Los Angeles County with its leading zero gone,
+  the shape Excel and CSV emit, and the int `6037101110` likewise — slices to
+  `"60"`, American Samoa's state FIPS, and rendered a confident *"NOT COVERED —
+  American Samoa is outside ..."* block with a Description of *"NOT a lookup
+  miss"*, when the remedy is `zfill(11)` and the README already says so.
+  Measured against the live CDFI Fund file: **8,707 of 85,395 tracts** collide
+  this way, every one of them in California (prefix `60`); `66`, `69` and `78`
+  collide with nothing, since no state + county pair spells 066/069/078. This
+  was the misdescription class the territory fix above was written to remove,
+  reintroduced at far greater reach than the 133 tracts it fixed.
+
+  Only a well-formed 11-digit GEOID can now carry a territory claim; a malformed
+  id returns `not-found` on both status ladders — exactly the behaviour before
+  the territory fix, and what *Known limitations* documents. **No normalization
+  and no sixth status value.** `zfill` would change answers for every caller
+  who gets `not-found` today, and both belong to 0.7.0 with an audited
+  methodology for input that was never a GEOID. Connecticut was never exposed —
+  its refusal slices five characters against five-character prefixes, and a
+  stripped GEOID cannot start with `0` — and a test now pins the width so it is
+  not "simplified" to a two-character slice later.
+
+- **`distress_description` and `summary()` disagreed on one object.** The
+  territory fix substituted the coverage wording inside `summary()` and left the
+  public `distress_description` property on `DISTRESS_LEVELS`, so a Guam result
+  printed *"Not covered — ... NOT a lookup miss"* on the page and returned
+  *"Indeterminate — eligibility not verified (no match / tract absent)"* from the
+  property — the exact wording this changelog said was removed. The selection
+  now lives in the property; `summary()` reads it. `distress_level` is untouched.
+
+- **The Island Areas file title rendered across two lines, abbreviated.** The
+  block promised the file name on one line so a user could copy it out; it
+  printed *"NMTC Low-Income Community Census Tracts"* split before the
+  parenthetical. The Fund's title is *"New Markets Tax Credit Low-Income
+  Community Census Tracts (2020 Island Areas Decennial Census)"*; it is now a
+  schema constant (`DECIA_ISLAND_AREAS_FILE_TITLE`), rendered verbatim on one
+  line, and the gate asserts the full title rather than only the parenthetical.
+
+- **`ELIGIBILITY_STATUS_VALUES` was not importable.** schema.py called it "the
+  public vocabulary, stated ONCE" and consumers were told to switch on it, but
+  it was in no `__all__` and no doc. Exported from the top level; named in the
+  README and `docs/api.md`; `not-covered-territory` added to UPGRADING as the
+  additive enum value it is, with the corrected membership test.
+
+- **The README promised two fixes to "0.6.0" that 0.6.0 does not contain**
+  (GEOID normalization; `opportunity_zone_status` on junk input), and a third
+  ("per-row batch failure capture is 0.6.0's", also in `census.py`'s docstring)
+  the same way. All retargeted to **0.7.0**. A new gate,
+  `tests/test_forward_promises.py`, reads the build version from
+  `pyproject.toml` and fails when README.md or a docs/ page names it as a
+  promise rather than a release note — a version-numbered promise in shipped
+  documentation is a contract that comes due, and the release it names is the
+  release nobody re-reads it in.
+
+- **The enumeration gate was blind to two drift shapes it was built for.** A
+  paraphrase of the biconditional ("exactly" → "precisely", value dropped) and a
+  copy cut to three values were both green. The stated-in-full gate now inspects
+  every list-shaped run of two or more statuses, and the contract gate anchors
+  on the status values and the `None` token rather than an adverb. Both
+  mutations observed red.
+
+- **`tools/docs_check.py`: a tautological sum check with an overclaiming
+  comment, an ignored exit status, and an `IndexError` on a pattern with no
+  capture group.** `-m X` and `-m "not X"` partition the collection by
+  construction, so `offline + live == total` could never fail and the comment
+  claiming it caught a lost `@live` mark was false; the check is deleted and
+  the README's own three numbers are still cross-checked. A collection error
+  now fails the gate (`readme-test-count-collect`) instead of parsing a count
+  out of a broken run; a pattern without a capture group is a named finding
+  (`readme-test-count-pattern`). `tests/test_docs_check_tool.py` gates all
+  three.
 
 - **A territory tract was told "not found" when the truth is "not covered".**
   For a GEOID in American Samoa (60), Guam (66), the Northern Mariana Islands
@@ -196,9 +277,9 @@ not break loudly.
   (AS 18, GU 57, MP 26, VI 32) and every one gets a real OZ 2.0 verdict. They
   now report `eligibility_status == "not-covered-territory"` and `summary()`
   names the remedy: territory LIC status is published in the CDFI Fund's
-  separate *"NMTC Low-Income Community Census Tracts (2020 Island Areas
-  Decennial Census)"* file (2023-12-19). **This package does not load that
-  file** — a 0.7.0 candidate, gated on its own vintage, mapping and audit
+  separate *"New Markets Tax Credit Low-Income Community Census Tracts (2020
+  Island Areas Decennial Census)"* file (2023-12-19). **This package does not
+  load that file** — a 0.7.0 candidate, gated on its own vintage, mapping and audit
   questions. Puerto Rico is *covered* (981 rows) and is deliberately excluded
   from the territory constant.
 

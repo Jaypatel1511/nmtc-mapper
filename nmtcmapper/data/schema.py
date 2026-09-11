@@ -426,9 +426,8 @@ CT_COG_COUNTY_PREFIXES = frozenset({
 # 26, US Virgin Islands 32 — and every one gets a real OZ 2.0 answer. Only the
 # NMTC half is uncoverable here.
 #
-# NMTC LIC status for these four IS published, in a SEPARATE CDFI Fund file:
-# "New Markets Tax Credit Low-Income Community Census Tracts (2020 Island Areas
-# Decennial Census)", last updated 2023-12-19, at
+# NMTC LIC status for these four IS published, in a SEPARATE CDFI Fund file,
+# DECIA_ISLAND_AREAS_FILE_TITLE below, last updated 2023-12-19, at
 # https://www.cdfifund.gov/documents/geographic-reports
 # This package DOES NOT LOAD that file. The point of this constant is to say so
 # at the point of failure instead of reporting a structural non-coverage as a
@@ -440,6 +439,15 @@ CT_COG_COUNTY_PREFIXES = frozenset({
 # and must keep reporting "not-found". This set is a statement about which
 # jurisdictions the loaded FILE covers, not about which FIPS look territorial.
 DECIA_TERRITORY_STATE_FIPS = frozenset({"60", "66", "69", "78"})
+
+# The Fund's exact title for the separate file, stated ONCE. summary() renders
+# it verbatim on one line so a user can copy it out and search for it; it is
+# the entire remedy the not-covered block exists to deliver. Not "NMTC ..." —
+# the Fund spells the program name out in the title.
+DECIA_ISLAND_AREAS_FILE_TITLE = (
+    "New Markets Tax Credit Low-Income Community Census Tracts "
+    "(2020 Island Areas Decennial Census)"
+)
 
 # Jurisdiction names, so the output names the place the way the Connecticut
 # refusal names Connecticut, rather than printing a two-digit code at a user.

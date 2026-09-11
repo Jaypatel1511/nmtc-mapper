@@ -153,6 +153,6 @@ targets = ["README.md", "pyproject.toml", "setup.py"]
 #   * assertion 2 -- every top-level name the README's blocks import resolves.
 #   * assertion 1 -- both `run` blocks match their committed expected files.
 #   * assertion 3 -- all three of the README's test-count claims match collection.
-#   * assertion 6 -- all 18 __all__ exports are mentioned in the README.
+#   * assertion 6 -- every __all__ export (23 in 0.6.0) is mentioned in the README.
 #
 # An empty list is the goal state, and it is now reached rather than assumed.
