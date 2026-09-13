@@ -57,6 +57,17 @@ include = ["nmtcmapper*"]
 [tool.pytest.ini_options]
 markers = [
     "live: exercises the real Census geocoder / CDFI Fund endpoints (network); deselected in CI, run locally with `-m live`",
+    # `repo`: this gate reads the REPOSITORY -- docs/, tools/, CHANGELOG.md, or
+    # the source tree under nmtcmapper/ -- and is meaningless in a packaged
+    # layout. release.yml's test-wheel and test-sdist jobs deliberately run the
+    # suite from a directory holding only tests/, pyproject.toml and README.md
+    # (that exclusion is what makes them prove the artifact rather than the
+    # checkout), so they deselect these with `-m "not live and not repo"`.
+    # ci.yml runs from the checkout and keeps every one of them. A gate that
+    # reads only README.md or pyproject.toml is NOT repo: both ship beside
+    # tests/ in every layout. tests/test_repo_marker.py pins the marked set in
+    # both directions; scripts/repro-wheel-tests.sh is the pre-tag check.
+    "repo: reads the repository (docs/, tools/, CHANGELOG.md, source files); meaningless in a packaged layout; release.yml deselects with `-m \"not live and not repo\"`",
 ]
 # A parametrized test whose argument list comes out EMPTY is silently marked
 # skipped by default, and a skip exits 0. That is the same vacuity class the

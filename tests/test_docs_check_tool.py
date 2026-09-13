@@ -26,6 +26,12 @@ import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
+# Every test here loads tools/docs_check.py, which ships in the sdist but is
+# not in the run directory of either release job -- and is not in the wheel
+# at all. Meaningless against an installed artifact; see the `repo` marker in
+# pyproject.toml and tests/test_repo_marker.py.
+pytestmark = pytest.mark.repo
+
 
 def _load_tool():
     spec = importlib.util.spec_from_file_location(
@@ -162,3 +168,63 @@ def test_a_lost_live_marker_is_not_detectable_by_collection_and_the_tool_says_so
         "the tautological collection sum check is back")
     assert "lost its `@live` mark" not in src, (
         "the comment overclaims a check that cannot fail")
+
+
+# ── 5. the fourth claim: repo-only gates ──────────────────────────────────────
+
+REPO_SPLIT = """
+    import pytest
+    def test_a(): pass
+    @pytest.mark.live
+    def test_b(): pass
+    @pytest.mark.repo
+    def test_c(): pass
+    @pytest.mark.repo
+    def test_d(): pass
+"""
+
+
+def test_the_fourth_claim_is_checked_against_its_own_marker(tool, tmp_path):
+    """FIX5: the README states how many gates are `@repo` -- the ones
+    release.yml deselects in its packaged layouts -- and that number is a claim
+    like the other three: collected with `-m <repo_marker>`, compared, and a
+    configured pattern that matches nothing is a failure.
+
+    Red proof: 2 tests carry @repo; the README claims 1 -> readme-test-count-repo.
+    Then the README claims 2 -> no finding. Then the pattern is configured but
+    the README has no such sentence -> readme-test-count-repo, naming the key.
+    """
+    root = _root_with(tmp_path, "x", {"test_split.py": REPO_SPLIT})
+    cfg = {"claim_pattern": CLAIM,
+           "live_claim_pattern": r"^(\d+) of these are live",
+           "offline_claim_pattern": r"^leaving (\d+) offline",
+           "repo_claim_pattern": r"^(\d+) of the offline tests are repo",
+           "live_marker": "live", "repo_marker": "repo"}
+
+    wrong = "4 tests\n1 of these are live\nleaving 3 offline\n1 of the offline tests are repo\n"
+    report = tool.Report()
+    tool.check_test_count(root, wrong, "tests", cfg, report)
+    assert "readme-test-count-repo" in report.ids, report.findings
+    msg = [f.message for f in report.findings if f.fid == "readme-test-count-repo"][0]
+    assert "claims 1 repo" in msg and "collects 2" in msg, msg
+    # the other three claims are right, so only the fourth fires
+    assert report.ids == ["readme-test-count-repo"], report.findings
+
+    right = wrong.replace("1 of the offline", "2 of the offline")
+    report = tool.Report()
+    tool.check_test_count(root, right, "tests", cfg, report)
+    assert report.ids == [], report.findings
+
+    # the marker is read from the config, not assumed: a repo_marker no test
+    # carries collects 0, and the claim of 2 then fails as a mismatch
+    report = tool.Report()
+    tool.check_test_count(root, right, "tests", dict(cfg, repo_marker="other"), report)
+    assert "readme-test-count-repo" in report.ids, report.findings
+
+    # configured but absent from the README: the claim moved, the gate says so
+    report = tool.Report()
+    tool.check_test_count(root, "4 tests\n1 of these are live\nleaving 3 offline\n",
+                          "tests", cfg, report)
+    assert "readme-test-count-repo" in report.ids, report.findings
+    msg = [f.message for f in report.findings if f.fid == "readme-test-count-repo"][0]
+    assert "repo_claim_pattern" in msg and "matches nothing" in msg, msg
