@@ -61,6 +61,13 @@ absence has already cost a release.
 
        PYTHONPATH=. pytest tests -m live -v
 
+   **If the CDFI Fund eligibility file is an `.xlsb` again**, this step is
+   the only place real `.xlsb` bytes meet the pyxlsb path: the offline suite
+   proves the container sniff on a synthetic zip and the row parse against a
+   mock, and the one real `.xlsb` this package ever read is no longer
+   downloadable (see `tests/test_workbook_dispatch.py`). Do not tag on the
+   offline suite alone in that case.
+
 3. **Run the offline suite** the way CI does:
 
        PYTHONPATH=. pytest tests -m "not live" -v

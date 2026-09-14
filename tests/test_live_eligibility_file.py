@@ -24,6 +24,76 @@ from nmtcmapper.data.schema import (
 
 pytestmark = pytest.mark.live
 
+# ── The parity evidence for 0.6.1, pinned (2026-09-14) ───────────────────────
+#
+# 0.6.1's central claim — the September-2026 .xlsx yields the same verdict as
+# the July-2026 .xlsb for every tract — was measured by
+# scripts/verify-column-n-parity.py against a legacy file that CAN NO LONGER BE
+# DOWNLOADED (its URL is a 403; there is no second copy). Evidence that lives
+# only in a cache is a hostage, not a gate. So the legacy file's identity and
+# every invariant derived from it are written here, and the invariants that do
+# not need the legacy file are asserted against the CURRENT file below, forever.
+#
+# Every value was re-derived from the legacy bytes one final time before being
+# typed, through the package's own dispatch and parser (the legacy load
+# substitutes the July-2026 strings at header indices 13/14/15; nothing else is
+# relaxed). Same style and purpose as tests/test_oz2.py's OZ2_PUBLISHED_FIGURES.
+LEGACY_XLSB_IDENTITY = {
+    "url":    "https://www.cdfifund.gov/system/files"
+              "?file=2025-08/NMTC_2016-2020_Severe_Deep_Distress_August-2025b.xlsb",
+    "sha256": "3a6f5851b836ba4b8c31aac48b7ededd761dd002a8831ebebb4d69a428772d49",
+    "bytes":  4_811_307,
+    "container": "xlsb",
+    # The July-2026 in-place re-publish of the Aug-2025b release, cached 2026-08-09.
+    "column_n_header": "High Migration Rural County Low-Income Community Census Tract",
+}
+
+# Invariants of the CDFI Fund 2016-2020 ACS table. Those marked CURRENT hold on
+# the September-2026 .xlsx and are gated live below; those marked LEGACY-ONLY
+# need the legacy bytes and are gated only by the parity script.
+ELIGIBILITY_PUBLISHED_FIGURES = {
+    "universe":            85_395,   # CURRENT and LEGACY: rows, identical GEOID sets
+    "eligible":            35_335,   # CURRENT and LEGACY: nmtc_eligible True
+    "level_deep":           8_061,   # CURRENT and LEGACY: distress_level
+    "level_severe":        13_121,
+    "level_lic":           14_153,
+    "level_ineligible":    50_060,
+    "severe_flag":         21_182,   # CURRENT and LEGACY: severe_distress True
+    "deep_flag":            8_061,   # CURRENT and LEGACY: deep_distress True
+    "hmr_current":          1_318,   # CURRENT: is_high_migration_rural True
+    "hmr_legacy":           1_422,   # LEGACY-ONLY
+    "hmr_dropped":            104,   # LEGACY-ONLY: legacy True, current False
+    "hmr_added":                0,   # LEGACY-ONLY: current True, legacy False (strict subset)
+    "hmr_current_mfi_na":      14,   # CURRENT: HMR rows whose ami_ratio is NA
+    "verdict_diffs":            0,   # LEGACY-ONLY: nmtc_eligible AND distress_level, all rows
+}
+# The MFI boundary between the kept 1,318 and the dropped 104 — the measurement
+# that says what column N now MEANS (the 45D(e)(5) <= 85% band).
+ELIGIBILITY_HMR_MFI_BOUNDARY = {
+    "kept_max":     0.849885,   # CURRENT: max ami_ratio over HMR rows (84.99%)
+    "dropped_min":  0.857339,   # LEGACY-ONLY: min ami_ratio over the 104 (85.7%)
+    "dropped_max":  1.344,      # LEGACY-ONLY (134.4%)
+}
+
+
+def derive_current_figures(table) -> dict:
+    """The CURRENT-file invariants, computed from a loaded table — never typed.
+    Keys match ELIGIBILITY_PUBLISHED_FIGURES so a mismatch names the figure."""
+    lvl = table["distress_level"].value_counts()
+    hmr = table[table["is_high_migration_rural"]]
+    return {
+        "universe":          len(table),
+        "eligible":          int(table["nmtc_eligible"].sum()),
+        "level_deep":        int(lvl.get("deep", 0)),
+        "level_severe":      int(lvl.get("severe", 0)),
+        "level_lic":         int(lvl.get("lic", 0)),
+        "level_ineligible":  int(lvl.get("ineligible", 0)),
+        "severe_flag":       int(table["severe_distress"].sum()),
+        "deep_flag":         int(table["deep_distress"].sum()),
+        "hmr_current":       len(hmr),
+        "hmr_current_mfi_na": int(hmr["ami_ratio"].isna().sum()),
+    }
+
 
 @pytest.fixture(scope="module")
 def live_table():
@@ -134,6 +204,33 @@ def test_live_severe_and_deep_flags_match_the_corrected_thresholds(live_table):
 
     assert int((severe != df["severe_distress"]).sum()) == 20
     assert int((deep != df["deep_distress"]).sum()) == 3
+
+
+def test_live_file_reproduces_the_pinned_0_6_1_figures(live_table):
+    """The half of the 0.6.1 parity evidence that can be re-run forever.
+
+    Each CURRENT-marked value in ELIGIBILITY_PUBLISHED_FIGURES is re-derived
+    from the live table and compared by key, so a failure names the figure
+    that moved (red proof: change one pinned value, this names that one).
+    Also the two structural relations the release rests on: every HMR tract
+    is eligible (what makes `C OR N` safe), and no HMR tract exceeds the 85%
+    band (what column N now means). The distress distribution here —
+    8,061 / 13,121 / 14,153 / 50,060 — is also the invariant recorded for an
+    earlier release; the September file reproduces it exactly."""
+    got = derive_current_figures(live_table)
+    mismatched = {k: (ELIGIBILITY_PUBLISHED_FIGURES[k], got[k])
+                  for k in got if got[k] != ELIGIBILITY_PUBLISHED_FIGURES[k]}
+    assert not mismatched, (
+        "live file no longer reproduces the pinned 0.6.1 figures "
+        f"(pinned, live): {mismatched}"
+    )
+    hmr = live_table[live_table["is_high_migration_rural"]]
+    assert bool(hmr["nmtc_eligible"].all()), "an HMR tract is not eligible"
+    kept_max = float(hmr["ami_ratio"].max())
+    assert kept_max == pytest.approx(ELIGIBILITY_HMR_MFI_BOUNDARY["kept_max"], abs=5e-7), kept_max
+    assert kept_max <= 0.85
+    # The pinned boundary must be a boundary: kept max strictly below dropped min.
+    assert ELIGIBILITY_HMR_MFI_BOUNDARY["kept_max"] < ELIGIBILITY_HMR_MFI_BOUNDARY["dropped_min"]
 
 
 def test_live_headers_are_byte_identical_to_the_pins():

@@ -16,6 +16,18 @@ act on.
 emergency release. The `.xlsb` row-reading path stays covered by the mocked-
 pyxlsb suite in test_schema_validation.py; this module proves the container
 sniff on both formats and the `.xlsx` path end-to-end on real bytes.
+
+THE .xlsb COVERAGE GAP, STATED WHERE A MAINTAINER WILL HIT IT. This suite
+proves the `.xlsb` container SNIFF on a synthetic OOXML zip (a `PK` archive
+holding `xl/workbook.bin`) and the `.xlsb` ROW PARSE against a mocked pyxlsb.
+No test reads real `.xlsb` bytes through pyxlsb: the only real `.xlsb` the
+package has ever read is the legacy CDFI Fund file, which can no longer be
+downloaded, and neither LibreOffice nor Excel automation will write an `.xlsb`
+fixture on the release machine (tried, 2026-09-13). Real `.xlsb` bytes are
+exercised only by scripts/verify-column-n-parity.py, which needs that legacy
+file. **If the Fund flips back to `.xlsb`, the pyxlsb path ships untested
+against real bytes** — run `pytest tests -m live` against the new file before
+tagging, because that is the first time the path meets them.
 """
 import zipfile
 from pathlib import Path

@@ -556,14 +556,14 @@ those changes must not move.
     # docs-check: skip shell command; the suite is run by CI, not by this gate
     PYTHONPATH=. pytest tests/ -v
 
-391 tests across all modules (including fail-loud, explicit-sample-mode,
+392 tests across all modules (including fail-loud, explicit-sample-mode,
 tri-state eligibility, fabricated-negative, null-sentinel-rendering,
 percentage-denominator, bool-coercion, exception-hierarchy-shape,
 cell-value-allowlist, async-batch, cache-poisoning, schema-drift, OZ 2.0
 answer-space, GEOID-scheme-discriminator, DECIA-territory-coverage,
 malformed-GEOID-shape, forward-version-promise, docs-check-tool,
 repo-marker-pinning, workbook-container-dispatch and AST-vacuity coverage).
-36 of these are `@live` tests that hit the real CDFI Fund / Census / Treasury
+37 of these are `@live` tests that hit the real CDFI Fund / Census / Treasury
 endpoints; CI deselects them with `-m "not live"`, leaving 355 offline.
 Six of the live tests are the **pinned-URL gates** (`tests/test_live_pinned_urls.py`):
 one per external URL this package pins, each failing on any non-200 and naming

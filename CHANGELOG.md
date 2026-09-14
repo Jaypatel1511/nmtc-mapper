@@ -115,6 +115,7 @@ a methodology release, not this one.
   that would have caught the move on 2026-09-03, eight days before 0.6.0
   shipped.** CI deselects `@live`, so these are named as a pre-tag step in
   `CONTRIBUTING.md` — a live gate nobody runs is the gate nobody ran.
+
 - `tests/test_workbook_dispatch.py`: the sniff on both containers, the
   filename-is-ignored proofs in both directions, and the `.xlsx` path end to
   end on real bytes (banner row, magnitudes, the C-or-N verdict, the pin).
@@ -123,6 +124,26 @@ a methodology release, not this one.
 - Two live eligibility tests: column N is all non-metro and within the 85%
   band (the meaning it now has), and the live file is the container this
   release was verified against.
+- **The parity evidence, pinned.** The legacy `.xlsb` the gate above ran
+  against cannot be downloaded from anywhere (its URL is a 403; the Fund
+  keeps no archive), so `tests/test_live_eligibility_file.py` now records
+  its identity — `LEGACY_XLSB_IDENTITY`: sha256
+  `3a6f5851b836ba4b8c31aac48b7ededd761dd002a8831ebebb4d69a428772d49`,
+  4,811,307 bytes, the dead URL — and every invariant derived from it
+  (`ELIGIBILITY_PUBLISHED_FIGURES`, `ELIGIBILITY_HMR_MFI_BOUNDARY`), each
+  re-derived from the bytes one final time on 2026-09-14 before being typed.
+  `test_live_file_reproduces_the_pinned_0_6_1_figures` asserts the half that
+  needs only the current file — universe, eligible, the four distress levels,
+  both distress flags, HMR 1,318 and its 14 MFI-NA rows, HMR ⊂ eligible, HMR
+  MFI max 84.99% — and runs forever; the script now refuses any file whose
+  digest is not the pinned one and checks the legacy-only half (1,422 / 104 /
+  0 / dropped MFI 85.7%–134.4%) against the same manifest.
+- **The `.xlsb` coverage gap, stated where it will be hit**: the suite proves
+  the `.xlsb` sniff on a synthetic zip and the row parse against a mock; real
+  `.xlsb` bytes are read only by the parity script, which needs the
+  unobtainable file. If the Fund flips back to `.xlsb`, the pyxlsb path ships
+  untested against real bytes until the live suite is run on the new file —
+  `tests/test_workbook_dispatch.py` and `CONTRIBUTING.md` both say so.
 
 ### Rule, recorded because the mitigation only works if it is visible
 
