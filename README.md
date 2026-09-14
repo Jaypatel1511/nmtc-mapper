@@ -281,8 +281,10 @@ A census tract qualifies as a Low-Income Community (LIC) if it meets ANY of:
   tract in a **high migration rural county** — §45D(e)(5), added by section 223 of
   the American Jobs Creation Act of 2004. A high migration rural county is one with
   net out-migration of at least 10% of its population over the 20 years ending
-  with the most recent census. 1,422 tracts carry this designation and 168 of
-  them qualify on this route alone.
+  with the most recent census. Through the July-2026 file, 1,422 tracts carried
+  the Fund's high-migration-rural column and 168 of them qualified on this
+  route alone; the September-2026 file narrows that column to 1,318 — see
+  `is_high_migration_rural` under Output Columns.
 
   **Both conjuncts are required, and the second is not obvious from the statute.**
   §45D(e)(5)(A) substitutes 85% into §45D(e)(1)(B)**(i)** — the *non-metropolitan*
@@ -290,7 +292,7 @@ A census tract qualifies as a Low-Income Community (LIC) if it meets ANY of:
   (1)(B)(ii) and never touched by the substitution. But §45D(e)(5)(B) defines
   "high migration rural county" by out-migration alone, with **no rurality and no
   metro test**, so the designation by itself does not carry the non-metro
-  requirement. On the current published file all 1,422 HMR tracts are non-metro,
+  requirement. On the current published file all 1,318 HMR tracts are non-metro,
   which makes the conjunct redundant as an empirical property of one file and not
   as a logical one — a test asserts the metro-HMR count is 0 and will fail loudly
   the day the Fund publishes one.
@@ -311,15 +313,20 @@ Distress levels:
                "ineligible")
 
 > **How distress is determined.** For the official CDFI Fund file (the live
-> `.xlsb` download), `severe_distress` and `deep_distress` are read **directly
+> download), `severe_distress` and `deep_distress` are read **directly
 > from the Fund's own pre-computed columns** — the package does not recompute
 > them from ACS variables. The CDFI Fund's published criteria for those
 > designations are, for reference, poverty **> 30%** / MFI <= 60% AMI /
 > unemployment >= 1.5x national (severe) and poverty **> 40%** / MFI
 > **<= 40%** AMI / unemployment **>= 2.5x** national (deep). Each set is OR-ed
-> internally and AND-ed with LIC. These are the workbook's own column headers,
-> verbatim — `Severe distress=LIC AND (Poverty>30%; MFI<=60%;Unemployment>=1.5)`
-> and `Deep distress=LIC AND (Poverty>40%; MFI<=40%;Unemployment>=2.5)`. The
+> internally and AND-ed with LIC. These are the workbook's own definitions,
+> verbatim from its NOTES sheet — `Severe distress=LIC AND (Poverty>30%;
+> MFI<=60%;Unemployment>=1.5)` and `Deep distress=LIC AND (Poverty>40%;
+> MFI<=40%;Unemployment>=2.5)`. (The September-2026 file's column headers
+> shorten these to `Severe Distress (Poverty>30%;MFI<=60%; OR
+> Unemployment>=1.5)` and the deep equivalent; the NOTES sheet keeps the
+> `LIC AND`, and the published YES/NO values are byte-identical to the
+> July-2026 file — 21,182 severe, 8,061 deep.) The
 > deep criteria read identically in the CDFI Fund's *NMTC Compliance Monitoring
 > and Evaluation Frequently Asked Questions* (updated April 2025), **Q32**:
 > poverty rates "greater than 40%", median family income that "does not exceed
@@ -344,7 +351,15 @@ Distress levels:
 ## Data Sources
 
 - CDFI Fund 2016-2020 ACS Low-Income Community Eligibility File
-  https://www.cdfifund.gov/research-data
+  https://www.cdfifund.gov/documents/geographic-reports — listed as "New Markets
+  Tax Credit 2016-2020 ACS Low-Income Communities and Distress". The pinned
+  download is `NMTC_LIC_Eligibility_Dataset_9_3_2026.xlsx` (September 2026).
+  **The Fund moves and re-publishes this file without notice** — the
+  August-2025 `.xlsb` URL every release from 0.4.3 to 0.6.0 pinned began
+  answering 403 on 2026-09-03, so a cold install of those versions cannot
+  load the table at all; the pin was corrected in 0.6.1. The loader reads whichever
+  container the Fund publishes (`.xlsb` or `.xlsx`) by sniffing the bytes, and
+  a `@live` test fetches the pinned URL and fails on any non-200.
 - US Census Bureau Geocoding API (free, no API key required)
   https://geocoding.geo.census.gov
 
@@ -384,10 +399,33 @@ all — and removes nothing you passed in:
 | `ami_ratio` | `Optional[float]` | may be `NaN` on a found tract — see below |
 | `unemployment_rate` | `Optional[float]` | may be `NaN` on a found tract — see below |
 | `is_non_metro` | `Optional[bool]` | `None` only when no row was read |
-| `is_high_migration_rural` | `Optional[bool]` | `None` only when no row was read |
+| `is_high_migration_rural` | `Optional[bool]` | `None` only when no row was read. **Definition changed in 0.6.1** under a stable name — see below |
 | `severe_distress` | `Optional[bool]` | `None` only when no row was read |
 | `deep_distress` | `Optional[bool]` | `None` only when no row was read |
 | `eligibility_status` | `str` | `verified-eligible` / `verified-ineligible` / `not-found` / `not-covered-territory` / `geocode-failed` — the vocabulary is exported as `nmtcmapper.ELIGIBILITY_STATUS_VALUES`, in this order |
+
+**`is_high_migration_rural` — source and definition.** This column carries the
+CDFI Fund's column N of the eligibility workbook, whatever the Fund currently
+publishes there, and the Fund changed what that is in September 2026:
+
+| File | Column N heading | `True` count |
+|---|---|---|
+| July 2026 `.xlsb` (0.4.2 – 0.6.0) | *High Migration Rural County Low-Income Community Census Tract* | 1,422 |
+| September 2026 `.xlsx` (0.6.1 –) | *High Migration Rural County Census Tract for Deep Distress* | 1,318 |
+
+The 1,318 are a strict subset of the 1,422. The 104 dropped are all non-metro
+tracts that are LIC by the **poverty** route (poverty >= 20%) with MFI between
+85.7% and 134.4%; every one of the 1,318 kept has MFI <= 85% (or MFI `NA`). So
+the column now flags the *income-route* §45D(e)(5) determination only, no longer
+"any LIC tract in a high-migration rural county". The workbook's own NOTES sheet
+describes the September-2026 re-publish as "Only formatting changes … No
+eligibility changes", which is true of the verdict and not of this column.
+**No verdict moves**: `nmtc_eligible` is column C *or* column N, the 104 are
+column C `YES` in both files, and all 85,395 tracts carry the same
+`nmtc_eligible` and `distress_level` under either file (0 differences; severe
+and deep are byte-identical). A caller filtering on `is_high_migration_rural`
+sees 104 fewer `True` rows than under 0.6.0, and this package will not keep a
+1,422-row field alive from a file that no longer exists.
 
 The four `Optional[bool]` columns are `None` **exactly** when `eligibility_status`
 is `not-found`, `not-covered-territory`, or `geocode-failed`. For a found tract
@@ -518,15 +556,20 @@ those changes must not move.
     # docs-check: skip shell command; the suite is run by CI, not by this gate
     PYTHONPATH=. pytest tests/ -v
 
-366 tests across all modules (including fail-loud, explicit-sample-mode,
+392 tests across all modules (including fail-loud, explicit-sample-mode,
 tri-state eligibility, fabricated-negative, null-sentinel-rendering,
 percentage-denominator, bool-coercion, exception-hierarchy-shape,
 cell-value-allowlist, async-batch, cache-poisoning, schema-drift, OZ 2.0
 answer-space, GEOID-scheme-discriminator, DECIA-territory-coverage,
 malformed-GEOID-shape, forward-version-promise, docs-check-tool,
-repo-marker-pinning and AST-vacuity coverage).
-28 of these are `@live` tests that hit the real CDFI Fund / Census / Treasury
-endpoints; CI deselects them with `-m "not live"`, leaving 338 offline.
+repo-marker-pinning, workbook-container-dispatch and AST-vacuity coverage).
+37 of these are `@live` tests that hit the real CDFI Fund / Census / Treasury
+endpoints; CI deselects them with `-m "not live"`, leaving 355 offline.
+Six of the live tests are the **pinned-URL gates** (`tests/test_live_pinned_urls.py`):
+one per external URL this package pins, each failing on any non-200 and naming
+where the replacement is published. They are the check that would have caught
+the September-2026 file move eight days before 0.6.0 shipped, and because CI
+deselects them they are a named pre-tag step in `CONTRIBUTING.md`.
 40 of the offline tests are `@repo` gates that read the repository itself
 (`docs/`, `tools/`, `CHANGELOG.md`, the source tree) and mean nothing against
 an installed artifact; the release pipeline's wheel and sdist jobs run the

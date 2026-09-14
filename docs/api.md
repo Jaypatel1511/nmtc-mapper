@@ -37,7 +37,7 @@ ineligible`), not by `total`, and is `None` when `determined == 0`. The 0.4.3 ke
 | ami_ratio | Optional[float] | MFI/AMI ratio. **Two null states** — see below |
 | unemployment_rate | Optional[float] | Tract unemployment rate. **Two null states** — see below |
 | is_non_metro | Optional[bool] | Non-metropolitan designation; None on the two indeterminate branches |
-| is_high_migration_rural | Optional[bool] | High-migration-rural-county designation; None on the two indeterminate branches |
+| is_high_migration_rural | Optional[bool] | The Fund's column N as currently published (narrowed to the income-route determination in the September-2026 file, 1,318 tracts — see README, Output Columns); None on the two indeterminate branches |
 | severe_distress | Optional[bool] | Severe-distress designation; None on the two indeterminate branches |
 | deep_distress | Optional[bool] | Deep-distress designation; None on the two indeterminate branches |
 | is_opportunity_zone | Optional[bool] | **True or None, never False.** True when the GEOID is on the Dec-2018 designation list. See `opportunity_zone_status` |

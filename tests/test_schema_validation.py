@@ -5,7 +5,8 @@ re-ordered/renamed column or a degenerate parse is read silently against the
 wrong fields. These tests drive a MOCKED pyxlsb workbook so they run offline.
 
 FIXTURE REALISM IS LOAD-BEARING — this fixture mirrors the real live file (the
-July-2026 re-publish of the Aug-2025b release, at the same URL):
+September-2026 .xlsx, `NMTC_LIC_Eligibility_Dataset_9_3_2026.xlsx`; the same
+positions held in the Aug-2025b/July-2026 .xlsb):
   * exactly 16 columns, with the real header strings (verified live);
   * poverty & unemployment stored as PERCENTS (19.7, 1.7) — the loader /100s them;
   * ami_ratio (col 5) stored as a FRACTION (0.9127...) even though its header
@@ -32,10 +33,11 @@ from nmtcmapper.data.schema import (
 )
 from nmtcmapper.exceptions import EligibilitySchemaError, EligibilityValueError
 
-# The real 16-column header row, verified against the live file (July-2026
-# re-publish). Indices 2 and 13 were renamed by the CDFI Fund in place; the
-# superseded Aug-2025b strings are kept below as SUPERSEDED_HEADER_2025B so the
-# suite can prove the pin MOVED rather than widened to accept both.
+# The real 16-column header row, verified against the live file (September-2026
+# .xlsx, read 2026-09-13). The CDFI Fund has now reworded bound headers twice —
+# indices 2 and 13 in July 2026 (in place, same URL), indices 13, 14 and 15 in
+# September 2026 (new URL, new container). Both superseded generations are kept
+# below so the suite can prove the pin MOVED rather than widened to accept all.
 LIVE_HEADER = [
     "2020 Census Tract Number FIPS code. GEOID",
     "OMB Metro/Non-metro Designation, March 2020 (OMB Bulletin No. 20-01)",
@@ -50,9 +52,9 @@ LIVE_HEADER = [
     "County Name",
     "Census Tract Unemployment to National Unemployment Ratio ",
     "Population for whom poverty status is determined 2016-2020 ACS",
-    "High Migration Rural County Low-Income Community Census Tract",
-    "Severe distress=LIC AND (Poverty>30%; MFI<=60%;Unemployment>=1.5)",
-    "Deep distress=LIC AND (Poverty>40%; MFI<=40%;Unemployment>=2.5)",
+    "High Migration Rural County Census Tract for Deep Distress",
+    "Severe Distress (Poverty>30%;MFI<=60%; OR Unemployment>=1.5)",
+    "Deep Distress (Poverty>40%;MFI<=40%; OR Unemployment>=2.5)",
 ]
 
 # The two header strings as published in the Aug-2025b release, superseded by
@@ -61,6 +63,16 @@ LIVE_HEADER = [
 SUPERSEDED_HEADER_2025B = {
     2:  "Does Census Tract Qualify For NMTC Low-Income Community (LIC) on Poverty or Income Criteria?",
     13: "High Migration County Low-Income Community Census Tract",
+}
+
+# The three header strings as published in the July-2026 .xlsb, superseded by
+# the September-2026 .xlsx (0.6.1). Index 13 is the one that also changed
+# MEANING (1,422 -> 1,318 YES); 14 and 15 dropped the `LIC AND` prefix with
+# byte-identical values. Same purpose as the dict above.
+SUPERSEDED_HEADER_2026_JULY = {
+    13: "High Migration Rural County Low-Income Community Census Tract",
+    14: "Severe distress=LIC AND (Poverty>30%; MFI<=60%;Unemployment>=1.5)",
+    15: "Deep distress=LIC AND (Poverty>40%; MFI<=40%;Unemployment>=2.5)",
 }
 
 
@@ -267,11 +279,14 @@ def test_na_cells_are_legitimate_nulls_not_bounds_errors(monkeypatch):
 # rather than widened — an exact-match guard that learned to accept both spellings
 # would no longer be able to detect the next re-publish.
 
-def test_superseded_2025b_headers_now_raise(monkeypatch):
-    """The pin MOVED. Feeding the old Aug-2025b header must now raise, at both
-    renamed indices. If this test ever passes silently, the guard has been
-    widened to tolerate drift."""
-    for idx, old in SUPERSEDED_HEADER_2025B.items():
+@pytest.mark.parametrize("superseded", [SUPERSEDED_HEADER_2025B,
+                                        SUPERSEDED_HEADER_2026_JULY],
+                         ids=["aug-2025b", "july-2026"])
+def test_superseded_headers_now_raise(monkeypatch, superseded):
+    """The pin MOVED. Feeding either superseded generation's header must now
+    raise, at every renamed index. If this test ever passes silently, the guard
+    has been widened to tolerate drift."""
+    for idx, old in superseded.items():
         stale = list(LIVE_HEADER)
         stale[idx] = old
         rows = [stale] + _padding(1200)
@@ -354,7 +369,7 @@ def test_schema_error_message_tells_the_user_what_to_do(monkeypatch):
 def _warm_cache(monkeypatch, tmp_path, *, cached_rows, fresh_rows):
     """Model a warm cache: the load serves `cached_rows`; a forced download
     replaces them with `fresh_rows`. Returns a state dict counting downloads."""
-    cache_file = tmp_path / "NMTC_LIC_Eligibility_2016_2020.xlsb"
+    cache_file = tmp_path / "NMTC_LIC_Eligibility_2016_2020.xlsx"
     cache_file.write_bytes(b"")                       # exists() -> True
     state = {"rows": cached_rows, "downloads": 0}
 
@@ -366,6 +381,10 @@ def _warm_cache(monkeypatch, tmp_path, *, cached_rows, fresh_rows):
 
     monkeypatch.setattr(loader, "_eligibility_cache_path", lambda: cache_file)
     monkeypatch.setattr(loader, "download_eligibility_file", fake_download)
+    # 0.6.1: the container sniff reads real bytes and the fixture file has
+    # none; pin the dispatch to the mocked pyxlsb path. The sniff itself is
+    # tested on real bytes in test_workbook_dispatch.py.
+    monkeypatch.setattr(loader, "_sniff_workbook_format", lambda _p: "xlsb")
     monkeypatch.setattr("pyxlsb.open_workbook",
                         lambda *_a, **_k: _FakeWorkbook(state["rows"]))
     return state
@@ -533,7 +552,7 @@ def test_the_or_is_a_no_op_on_the_file_as_published(monkeypatch):
 @pytest.mark.parametrize("kwargs,col_label,planted", [
     ({"metro":   "Nonmetro"}, "1 (OMB Metro/Non-metro Designation)", "Nonmetro"),
     ({"lic":     "Y"},        "C (LIC eligibility)",                 "Y"),
-    ({"highmig": "Y"},        "N (High Migration Rural County LIC)", "Y"),
+    ({"highmig": "Y"},        "N (High Migration Rural County tract)", "Y"),
     ({"severe":  "Y"},        "O (Severe distress)",                 "Y"),
     ({"deep":    "Y"},        "P (Deep distress)",                   "Y"),
 ])

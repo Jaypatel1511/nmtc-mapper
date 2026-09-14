@@ -39,7 +39,7 @@
 | ami_ratio | Optional[float] | MFI as pct of area median income. **Two null states** — see below |
 | unemployment_rate | Optional[float] | Census tract unemployment rate. **Two null states** — see below |
 | is_non_metro | Optional[bool] | CDFI Fund non-metropolitan designation; None on the indeterminate branches |
-| is_high_migration_rural | Optional[bool] | CDFI Fund high-migration-rural-county designation; None on the indeterminate branches |
+| is_high_migration_rural | Optional[bool] | The Fund's column N as currently published (narrowed to the income-route determination in the September-2026 file, 1,318 tracts — see README, Output Columns); None on the indeterminate branches |
 | severe_distress | Optional[bool] | CDFI Fund severe-distress designation (read from the official file); None on the indeterminate branches |
 | deep_distress | Optional[bool] | CDFI Fund deep-distress designation (read from the official file); None on the indeterminate branches |
 

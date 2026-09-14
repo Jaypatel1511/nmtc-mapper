@@ -219,22 +219,58 @@ OZ_URL_2018 = (
 )
 
 # ── Download URLs ─────────────────────────────────────────────────────────────
-# Aug 2025 update: CDFI Fund replaced the xlsx with an xlsb at a new path.
-# The file now includes pre-computed severe/deep distress flags.
+# 0.6.1 (2026-09-13): RETARGETED. On 2026-09-03 the CDFI Fund replaced the
+# Aug-2025b `.xlsb` with an `.xlsx` at a NEW `?file=` route, and the old route
+# began answering 403 — to every UA, not just curl's. 0.4.3, 0.5.0 and 0.6.0 all
+# pin that same dead literal, so no release before this one can cold-load the
+# table at all. The package failed safe (EligibilityDownloadError, no fabricated
+# verdict); a warm ~/.nmtcmapper/cache hid it on every machine that had one.
+#
+# The extension in this URL is NOT what selects the parser. A Drupal `?file=`
+# route is not a content type, and the Fund has now changed container format
+# once (xlsx -> xlsb in Aug 2025, xlsb -> xlsx in Sep 2026). loader.py reads
+# the ZIP member list and dispatches on `xl/workbook.bin` vs `xl/workbook.xml`;
+# a flip back must not need another emergency release.
+#
+# Where the replacement is listed when THIS one dies:
+#   https://www.cdfifund.gov/documents/geographic-reports
+# ("New Markets Tax Credit 2016-2020 ACS Low-Income Communities and Distress").
+# tests/test_live_pinned_urls.py fetches this URL and fails on any non-200.
+#
+# Superseded pins, for the record (all dead):
+#   Aug 2025 - Sep 2026:
+#     ?file=2025-08/NMTC_2016-2020_Severe_Deep_Distress_August-2025b.xlsb
+#     (re-published IN PLACE with renamed headers in July 2026 — see 0.4.2)
 CDFI_FUND_LIC_URL_2020 = (
     "https://www.cdfifund.gov/system/files"
-    "?file=2025-08/NMTC_2016-2020_Severe_Deep_Distress_August-2025b.xlsb"
+    "?file=2026-09/NMTC_LIC_Eligibility_Dataset_9_3_2026.xlsx"
 )
 
-# ── Live .xlsb structure (Aug-2025b release) — schema validation (0.4.0) ──────
+# ── Live data-sheet structure — schema validation (0.4.0) ────────────────────
 # The live loader binds columns POSITIONALLY and skips the header blind, so an
 # upstream column re-order/rename or a degenerate parse would be read silently
 # against the wrong fields. These constants are verified against the live file —
 # they were never copied from the retired .xlsx path's column mapping, which
 # 0.5.0 deleted with the dead branch that consumed it — and they let the loader
 # validate structure before it trusts any row.
+#
+# ON THE `_XLSB_` IN THESE NAMES (0.6.1). They were named when the Fund's file
+# was an .xlsb (Aug 2025 - Sep 2026). Since 0.6.1 the same pins apply to the
+# data sheet of WHICHEVER container the Fund publishes — the loader sniffs the
+# ZIP and reads .xlsb via pyxlsb or .xlsx via openpyxl into one positional
+# parser. The names are kept because renaming module constants is churn with no
+# behaviour behind it, and tests import them; read "XLSB" as "the CDFI Fund
+# eligibility workbook".
 ELIGIBILITY_XLSB_SHEET = "2016-2020"
 ELIGIBILITY_XLSB_COLUMN_COUNT = 16
+
+# The header row is the FIRST row whose column 0 is non-blank, searched within
+# this many leading rows. The Aug-2025b/.xlsb layouts put the header at row 0;
+# the September-2026 .xlsx puts a banner row above it (every cell empty except
+# column N, "Targeted Distressed Areas"), so the header is at row 1. Bounded so a
+# sheet with no recognisable header in its first rows is a schema error, not a
+# scan through 85,000 rows looking for one.
+ELIGIBILITY_HEADER_SEARCH_ROWS = 5
 
 # Expected header string at each positionally-bound index the loader actually
 # reads (0,1,2,3,5,7,13,14,15). Matched after normalization (collapse internal
@@ -272,11 +308,37 @@ ELIGIBILITY_XLSB_EXPECTED_HEADERS = {
     3:  "Census Tract Poverty Rate % (2016-2020 ACS)",
     5:  "Census Tract Percent of Benchmarked Median Family Income (%) 2016-2020 ACS",
     7:  "Census Tract Unemployment Rate (%) 2016-2020",
-    # 0.4.2: "Rural" inserted in the July-2026 re-publish. Cosmetic — the column's
-    # 1,422 YES values are byte-identical to the Aug-2025b release.
-    13: "High Migration Rural County Low-Income Community Census Tract",
-    14: "Severe distress=LIC AND (Poverty>30%; MFI<=60%;Unemployment>=1.5)",
-    15: "Deep distress=LIC AND (Poverty>40%; MFI<=40%;Unemployment>=2.5)",
+    # 0.6.1: COLUMN N CHANGED MEANING in the September-2026 file, and this is
+    # the one change in it that is not formatting, whatever the NOTES sheet says
+    # ("Only formatting changes were made. No eligibility changes were made.").
+    #   July 2026:  "High Migration Rural County Low-Income Community Census
+    #                Tract"                                       1,422 YES
+    #   Sept 2026:  "High Migration Rural County Census Tract for Deep
+    #                Distress"                                    1,318 YES
+    # The 104 dropped are all non-metro tracts that are LIC by the POVERTY route
+    # (column E YES, column G NO) with MFI 85.7%-134.4%; every one of the 1,318
+    # kept has MFI <= 85% or MFI = NA. So the column now flags the INCOME-route
+    # HMR determination only (the 45D(e)(5) band), no longer "any LIC tract in
+    # an HMR county". Measured on both files, 2026-09-13.
+    #
+    # THE VERDICT DOES NOT MOVE. `nmtc_eligible` is column C OR column N; the
+    # 1,318 are a strict subset of the 1,422, and every one of the 104 is column
+    # C YES in both files. 0 of 85,395 verdicts differ, and columns O/P are
+    # byte-identical (21,182 / 8,061). What moves is `is_high_migration_rural`:
+    # True for 1,318 tracts, was 1,422. This package carries the Fund's CURRENT
+    # column and discloses the change (README, CHANGELOG 0.6.1) rather than
+    # keeping a field alive from a file that no longer exists.
+    13: "High Migration Rural County Census Tract for Deep Distress",
+    # 0.6.1: the September-2026 headers dropped the `LIC AND` prefix and wrote
+    # the unemployment prong with an explicit `OR`. The VALUES are byte-identical
+    # to the July-2026 file (64,213/21,182 and 77,334/8,061), and the workbook's
+    # own NOTES sheet still defines both as `... =LIC AND (...)`, so the
+    # criterion is unchanged and the constants above still agree with the file.
+    # Superseded July-2026 wording, for the record:
+    #   "Severe distress=LIC AND (Poverty>30%; MFI<=60%;Unemployment>=1.5)"
+    #   "Deep distress=LIC AND (Poverty>40%; MFI<=40%;Unemployment>=2.5)"
+    14: "Severe Distress (Poverty>30%;MFI<=60%; OR Unemployment>=1.5)",
+    15: "Deep Distress (Poverty>40%;MFI<=40%; OR Unemployment>=2.5)",
 }
 
 # Row-count floor: the live universe is 85,395 tracts. A degenerate/near-empty
@@ -318,7 +380,7 @@ ELIGIBILITY_VALUE_BOUNDS = {
 # Matched AFTER the loader's existing `.strip().upper()` normalization. Zero rows
 # are affected on the live file: all five columns are strict binaries with no
 # blanks and no third value across all 85,395 rows (Metro/Non-metro 71,554 /
-# 13,841; col C 50,060 NO / 35,335 YES; col N 83,973 / 1,422; col O 64,213 /
+# 13,841; col C 50,060 NO / 35,335 YES; col N 84,077 / 1,318; col O 64,213 /
 # 21,182; col P 77,334 / 8,061).
 ELIGIBILITY_METRO_ALLOWED = frozenset({"METRO", "NON-METRO"})
 ELIGIBILITY_YESNO_ALLOWED = frozenset({"YES", "NO"})
@@ -327,7 +389,7 @@ ELIGIBILITY_YESNO_ALLOWED = frozenset({"YES", "NO"})
 ELIGIBILITY_XLSB_VALUE_ALLOWLISTS = {
     1:  ("1 (OMB Metro/Non-metro Designation)",        ELIGIBILITY_METRO_ALLOWED),
     2:  ("C (LIC eligibility)",                        ELIGIBILITY_YESNO_ALLOWED),
-    13: ("N (High Migration Rural County LIC)",        ELIGIBILITY_YESNO_ALLOWED),
+    13: ("N (High Migration Rural County tract)",      ELIGIBILITY_YESNO_ALLOWED),
     14: ("O (Severe distress)",                        ELIGIBILITY_YESNO_ALLOWED),
     15: ("P (Deep distress)",                          ELIGIBILITY_YESNO_ALLOWED),
 }
