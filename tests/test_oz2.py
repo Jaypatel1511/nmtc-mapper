@@ -603,10 +603,11 @@ def test_no_oz2_figure_is_hand_typed(filename):
                 # (2023-12-19). A publication date, not a table count.
                 "2023",
                 "0.70", "45", "125", "34235",
-                # HTTP statuses in the exception-hierarchy diagram, and the
+                # HTTP statuses in the exception-hierarchy diagram (and the
+                # 200 the 0.6.1 pinned-URL gates require of OZ2_URL), and the
                 # statutory "fewer than 100 LICs" threshold for the 25-tract
-                # designation exception. Neither is a table count.
-                "403", "404", "100"}
+                # designation exception. None is a table count.
+                "403", "404", "200", "100"}
     offenders = []
     for block in _oz2_paragraphs(path.read_text(encoding="utf-8")):
         # The suite-size paragraph is a TEST-COUNT claim, not a Treasury figure.

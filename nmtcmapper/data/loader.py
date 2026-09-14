@@ -6,6 +6,7 @@ tract ABSENT from this table is therefore unknown/indeterminate, not ineligible.
 """
 import os
 import re
+import zipfile
 import requests
 import pandas as pd
 from pathlib import Path
@@ -20,6 +21,7 @@ from nmtcmapper.data.schema import (
     CACHE_DIR, CDFI_FUND_LIC_URL_2020,
     ELIGIBILITY_XLSB_SHEET, ELIGIBILITY_XLSB_COLUMN_COUNT,
     ELIGIBILITY_XLSB_EXPECTED_HEADERS, ELIGIBILITY_MIN_ROWS,
+    ELIGIBILITY_HEADER_SEARCH_ROWS,
     ELIGIBILITY_VALUE_BOUNDS, ELIGIBILITY_XLSB_VALUE_ALLOWLISTS,
     LIC_POVERTY_RATE_THRESHOLD,
     LIC_AMI_RATIO_METRO_THRESHOLD,
@@ -68,7 +70,7 @@ _DRIFT_REMEDY = (
 
 def _validate_xlsb_header(header_vals: list) -> None:
     """Fail loud (EligibilitySchemaError) BEFORE any row is parsed if the live
-    .xlsb structure does not match the expected CDFI Fund layout.
+    data-sheet structure does not match the expected CDFI Fund layout.
 
     The loader binds columns positionally, so a wrong column count or a
     renamed/re-ordered column at a bound index must be caught here — otherwise a
@@ -77,7 +79,7 @@ def _validate_xlsb_header(header_vals: list) -> None:
     n = len(header_vals)
     if n != ELIGIBILITY_XLSB_COLUMN_COUNT:
         raise EligibilitySchemaError(
-            f"eligibility .xlsb header has {n} columns, expected "
+            f"eligibility workbook header has {n} columns, expected "
             f"{ELIGIBILITY_XLSB_COLUMN_COUNT}. The column layout has changed — "
             f"the positional bind can no longer be trusted."
             + _DRIFT_REMEDY
@@ -86,7 +88,7 @@ def _validate_xlsb_header(header_vals: list) -> None:
         actual = header_vals[idx] if idx < n else None
         if _normalize_header(actual) != _normalize_header(expected):
             raise EligibilitySchemaError(
-                f"eligibility .xlsb header mismatch at column index {idx}: "
+                f"eligibility workbook header mismatch at column index {idx}: "
                 f"expected {expected!r}, got {actual!r}. The loader binds columns "
                 f"positionally, so a renamed/re-ordered column would be read "
                 f"against the wrong field."
@@ -129,7 +131,7 @@ def _checked_cell(col_index: int, raw, row_index: int) -> str:
     normalized = str(raw).strip().upper()
     if normalized not in allowed:
         raise EligibilitySchemaError(
-            f"eligibility .xlsb column {label} carries an unrecognized value at "
+            f"eligibility workbook column {label} carries an unrecognized value at "
             f"data row {row_index}: {raw!r} (normalizes to {normalized!r}). "
             f"Expected one of {sorted(allowed)}."
             f"\n\nThe header guard cannot catch this: it pins header strings, not "
@@ -154,7 +156,14 @@ def _cache_path(filename: str) -> Path:
 
 # The cache filename never changes — and neither does the CDFI Fund's URL when
 # they re-publish, which is why a warm cache can hold a superseded layout.
-ELIGIBILITY_CACHE_FILENAME = "NMTC_LIC_Eligibility_2016_2020.xlsb"
+#
+# 0.6.1: renamed from `..._2016_2020.xlsb`. The Fund now publishes an .xlsx and
+# the extension here records that — but the loader NEVER trusts it: the parser
+# is chosen by sniffing the ZIP (`_sniff_workbook_format`), so xlsb bytes under
+# this name would still be read by pyxlsb. The rename also means an upgrade
+# from <= 0.6.0 does a plain cold download rather than a self-heal; the old
+# `.xlsb` file, if present, is simply unused and may be deleted.
+ELIGIBILITY_CACHE_FILENAME = "NMTC_LIC_Eligibility_2016_2020.xlsx"
 
 
 def _eligibility_cache_path() -> Path:
@@ -305,14 +314,11 @@ def _load_eligibility_table(force: bool = False) -> pd.DataFrame:
         )
     print(f"Loading eligibility table from {path}...")
     try:
-        # 0.5.0: the `.xlsb` parser is the ONLY parser. Through 0.4.3 an `else`
-        # branch here read a generic workbook via `_process_eligibility_table()`,
-        # which was structurally unreachable — `path` comes only from
-        # `download_eligibility_file()`, which returns only the cache path, whose
-        # filename is a module constant ending `.xlsb`. Both the branch and the
-        # function are deleted; see schema.py's removal note for the drive that
-        # confirmed it before the cut.
-        return _load_xlsb_table(path)
+        # 0.6.1: ONE positional parser, TWO container readers, chosen by the
+        # bytes. (0.5.0 deleted a generic-workbook `else` branch here as
+        # structurally unreachable dead code keyed on `path.suffix`; this is
+        # not that branch coming back — nothing here consults the suffix.)
+        return _load_eligibility_workbook(path)
     except EligibilityDataError:
         raise
     except ImportError:
@@ -330,14 +336,140 @@ def _load_eligibility_table(force: bool = False) -> pd.DataFrame:
         ) from e
 
 
-def _load_xlsb_table(path: Path) -> pd.DataFrame:
-    """Parse the CDFI Fund .xlsb file (Aug-2025b layout, July-2026 re-publish).
+# Both containers this loader accepts are OOXML ZIPs; the ONE member that
+# differs is the workbook part. This is what the dispatch reads — never the
+# URL's extension, never the cache filename.
+_XLSB_WORKBOOK_PART = "xl/workbook.bin"
+_XLSX_WORKBOOK_PART = "xl/workbook.xml"
 
-    Column layout (0-indexed), confirmed against the live file:
+
+def _sniff_workbook_format(path: Path) -> str:
+    """Return "xlsb" or "xlsx" from the bytes at `path`; raise a named error otherwise.
+
+    0.6.1. Before this, the parser was chosen by fiat (pyxlsb, always) and the
+    September-2026 .xlsx died inside pyxlsb with a bare
+    ``KeyError: "There is no item named 'xl/_rels/workbook.bin.rels' in the
+    archive"`` — not even a package exception. An unreadable file must raise a
+    named error that quotes what was actually found, so the person reading it
+    can tell an HTML error page from a new container from a truncated write.
+
+    Raises EligibilityParseError, which the cached-file self-heal in
+    ``load_eligibility_table`` treats as "discard and re-download once".
+    """
+    size = path.stat().st_size if path.exists() else 0
+    head = path.read_bytes()[:16] if size else b""
+    if not head.startswith(_ZIP_MAGIC):
+        raise EligibilityParseError(
+            f"eligibility file {path} is not an Excel workbook: expected a "
+            f"ZIP/OOXML container starting {_ZIP_MAGIC!r}, got {size:,} bytes "
+            f"starting {head!r}. An HTML error page, an empty file and a "
+            f"truncated write all look like this."
+        )
+    try:
+        with zipfile.ZipFile(path) as zf:
+            names = zf.namelist()
+    except zipfile.BadZipFile as e:
+        raise EligibilityParseError(
+            f"eligibility file {path} starts with the ZIP magic {_ZIP_MAGIC!r} "
+            f"but is not a readable ZIP ({e}); first bytes {head!r}. The bytes "
+            f"are corrupt or truncated."
+        ) from e
+    if _XLSB_WORKBOOK_PART in names:
+        return "xlsb"
+    if _XLSX_WORKBOOK_PART in names:
+        return "xlsx"
+    raise EligibilityParseError(
+        f"eligibility file {path} is a ZIP but not a spreadsheet this package "
+        f"can read: it has neither {_XLSB_WORKBOOK_PART!r} (.xlsb) nor "
+        f"{_XLSX_WORKBOOK_PART!r} (.xlsx). First bytes {head!r}; members found: "
+        f"{names[:8]}{' ...' if len(names) > 8 else ''}. If the CDFI Fund has "
+        f"moved to a third container format, this package needs a release."
+    )
+
+
+def _iter_xlsb_rows(path: Path):
+    """Yield each row of the data sheet as a list of cell values (pyxlsb)."""
+    try:
+        import pyxlsb
+    except ImportError:
+        raise ImportError(
+            "pyxlsb is required to read the CDFI Fund .xlsb file. "
+            "Install it with: pip install pyxlsb"
+        )
+    with pyxlsb.open_workbook(str(path)) as wb:
+        with wb.get_sheet(ELIGIBILITY_XLSB_SHEET) as sheet:
+            for row in sheet.rows():
+                yield [c.v for c in row]
+
+
+def _iter_xlsx_rows(path: Path):
+    """Yield each row of the data sheet as a list of cell values (openpyxl).
+
+    read_only + data_only: the September-2026 file is a 60 MB sheet XML with a
+    3.5 MB calcChain; the streaming reader is what keeps this within the memory
+    the .xlsb path used, and data_only means a formula cell yields its cached
+    value rather than the formula text."""
+    import openpyxl
+    # Hand openpyxl an open FILE, not the path: given a path string it refuses
+    # any extension outside its own list before looking at a byte, and the
+    # cache filename is a module constant that says nothing about the bytes
+    # in it. The dispatch is on the container, all the way down.
+    with open(path, "rb") as fh:
+        wb = openpyxl.load_workbook(fh, read_only=True, data_only=True)
+        try:
+            if ELIGIBILITY_XLSB_SHEET not in wb.sheetnames:
+                raise EligibilityParseError(
+                    f"eligibility file {path} has no sheet named "
+                    f"{ELIGIBILITY_XLSB_SHEET!r} (sheets present: {wb.sheetnames})."
+                )
+            for row in wb[ELIGIBILITY_XLSB_SHEET].iter_rows(values_only=True):
+                yield list(row)
+        finally:
+            wb.close()
+
+
+def _load_xlsb_table(path: Path) -> pd.DataFrame:
+    """The CDFI Fund eligibility workbook as an .xlsb (Aug 2025 - Sep 2026)."""
+    return _parse_eligibility_rows(_iter_xlsb_rows(path))
+
+
+def _load_xlsx_table(path: Path) -> pd.DataFrame:
+    """The CDFI Fund eligibility workbook as an .xlsx (Sep 2026 -)."""
+    return _parse_eligibility_rows(_iter_xlsx_rows(path))
+
+
+def _load_eligibility_workbook(path: Path) -> pd.DataFrame:
+    """Dispatch on the container the bytes actually are. See _sniff_workbook_format."""
+    fmt = _sniff_workbook_format(path)
+    if fmt == "xlsb":
+        return _load_xlsb_table(path)
+    return _load_xlsx_table(path)
+
+
+def _parse_eligibility_rows(rows) -> pd.DataFrame:
+    """Parse the CDFI Fund data sheet from a row iterator (either container).
+
+    Column layout (0-indexed), confirmed against the live file (September-2026
+    .xlsx; identical positions in the Aug-2025b/July-2026 .xlsb):
       0  GEOID, 1 Metro/Non-metro, 2 LIC eligible (YES/NO),
       3  Poverty rate %, 5 MFI ratio (decimal), 7 Unemployment rate %,
-     13  High Migration Rural County LIC (YES/NO), 14 Severe distress (YES/NO),
+     13  High Migration Rural County tract (YES/NO), 14 Severe distress (YES/NO),
      15  Deep distress (YES/NO)
+
+    `rows` yields one list of cell VALUES per sheet row, in sheet order, starting
+    at the sheet's first row. The header row is located, not assumed: it is the
+    first row with a non-blank column 0 within ELIGIBILITY_HEADER_SEARCH_ROWS
+    (the September-2026 .xlsx carries a banner row above it; the .xlsb did not).
+
+    0.6.1 NOTE ON COLUMN N. The paragraphs below were written against the
+    July-2026 file, where column N held 1,422 YES and was titled "... Low-Income
+    Community Census Tract". The September-2026 file retitles it "... Census
+    Tract for Deep Distress" and holds 1,318 YES — the 104 dropped are poverty-
+    route LICs with MFI above 85%, so the column now carries the INCOME-route
+    determination only. Every check below still holds on the new file (the
+    1,318 are all column-C YES, all non-metro, all MFI <= 85% or NA), the OR is
+    still a no-op, and 0 of 85,395 verdicts moved. The figures in the
+    paragraphs are left as measured on the file they name. See schema.py.
 
     THE LIC VERDICT IS COLUMN 2 **OR** COLUMN 13 (0.4.2).
     ------------------------------------------------------------------
@@ -379,80 +511,92 @@ def _load_xlsb_table(path: Path) -> pd.DataFrame:
     are already column-2 YES, so the eligible count is 35,335 with and without
     it. It is a floor under the verdict, not a change to it.
     """
-    try:
-        import pyxlsb
-    except ImportError:
-        raise ImportError(
-            "pyxlsb is required to read the CDFI Fund .xlsb file. "
-            "Install it with: pip install pyxlsb"
-        )
 
     def _num(v):
         # bool is an int subclass — exclude it so a stray YES/NO never divides.
         return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
+    def _blank_cell(v):
+        return v is None or (isinstance(v, str) and not v.strip())
+
     records = []
-    with pyxlsb.open_workbook(str(path)) as wb:
-        with wb.get_sheet(ELIGIBILITY_XLSB_SHEET) as sheet:
-            for i, row in enumerate(sheet.rows()):
-                vals = [c.v for c in row]
-                if i == 0:
-                    # Validate structure BEFORE trusting any positional bind.
-                    _validate_xlsb_header(vals)
-                    continue
-                if not vals[0]:
-                    continue
+    header_seen = False
+    for i, vals in enumerate(rows):
+        if not header_seen:
+            if not vals or _blank_cell(vals[0]):
+                # A pre-header row (the September-2026 banner). Bounded.
+                if i + 1 >= ELIGIBILITY_HEADER_SEARCH_ROWS:
+                    raise EligibilitySchemaError(
+                        f"no header row found in the first "
+                        f"{ELIGIBILITY_HEADER_SEARCH_ROWS} rows of sheet "
+                        f"{ELIGIBILITY_XLSB_SHEET!r}: every one has a blank "
+                        f"column 0. The layout has changed."
+                        + _DRIFT_REMEDY
+                    )
+                continue
+            # Validate structure BEFORE trusting any positional bind.
+            _validate_xlsb_header(vals)
+            header_seen = True
+            continue
+        if not vals or not vals[0]:
+            continue
 
-                geoid        = str(vals[0]).strip().zfill(11)
-                # Every categorical cell goes through the value allowlist first
-                # (0.5.0). `_checked_cell` raises on anything unrecognized rather
-                # than letting `!= "METRO"` drift True or `== "YES"` drift False.
-                non_metro    = _checked_cell(1, vals[1], i) == "NON-METRO"
-                poverty_rate = (_num(vals[3]) / 100) if _num(vals[3]) is not None else None
-                ami_ratio    = _num(vals[5])
-                unemp_rate   = (_num(vals[7]) / 100) if _num(vals[7]) is not None else None
-                high_migr    = _checked_cell(13, vals[13], i) == "YES"
-                severe       = _checked_cell(14, vals[14], i) == "YES"
-                deep         = _checked_cell(15, vals[15], i) == "YES"
+        geoid        = str(vals[0]).strip().zfill(11)
+        # Every categorical cell goes through the value allowlist first
+        # (0.5.0). `_checked_cell` raises on anything unrecognized rather
+        # than letting `!= "METRO"` drift True or `== "YES"` drift False.
+        non_metro    = _checked_cell(1, vals[1], i) == "NON-METRO"
+        poverty_rate = (_num(vals[3]) / 100) if _num(vals[3]) is not None else None
+        ami_ratio    = _num(vals[5])
+        unemp_rate   = (_num(vals[7]) / 100) if _num(vals[7]) is not None else None
+        high_migr    = _checked_cell(13, vals[13], i) == "YES"
+        severe       = _checked_cell(14, vals[14], i) == "YES"
+        deep         = _checked_cell(15, vals[15], i) == "YES"
 
-                # The LIC verdict is column C **OR** column N, never column C
-                # alone. See the block comment above _load_xlsb_table for why
-                # column N is an LIC determination and not bare "in a high
-                # migration rural county", and why this is a no-op today.
-                lic_elig     = (_checked_cell(2, vals[2], i) == "YES") or high_migr
+        # The LIC verdict is column C **OR** column N, never column C
+        # alone. See the docstring above for why column N is an LIC
+        # determination and not bare "in a high migration rural county",
+        # and why this is a no-op today.
+        lic_elig     = (_checked_cell(2, vals[2], i) == "YES") or high_migr
 
-                # Value plausibility (Fix 6) — on the STORED value; None passes.
-                _check_value_bounds("poverty_rate", poverty_rate, i)
-                _check_value_bounds("ami_ratio", ami_ratio, i)
-                _check_value_bounds("unemployment_rate", unemp_rate, i)
+        # Value plausibility (Fix 6) — on the STORED value; None passes.
+        _check_value_bounds("poverty_rate", poverty_rate, i)
+        _check_value_bounds("ami_ratio", ami_ratio, i)
+        _check_value_bounds("unemployment_rate", unemp_rate, i)
 
-                if deep:
-                    dlevel = "deep"
-                elif severe:
-                    dlevel = "severe"
-                elif lic_elig:
-                    dlevel = "lic"
-                else:
-                    dlevel = "ineligible"
+        if deep:
+            dlevel = "deep"
+        elif severe:
+            dlevel = "severe"
+        elif lic_elig:
+            dlevel = "lic"
+        else:
+            dlevel = "ineligible"
 
-                records.append({
-                    "tract_id":              geoid,
-                    "nmtc_eligible":         lic_elig,
-                    "distress_level":        dlevel,
-                    "poverty_rate":          poverty_rate,
-                    "ami_ratio":             ami_ratio,
-                    "unemployment_rate":     unemp_rate,
-                    "is_non_metro":          non_metro,
-                    "is_high_migration_rural": high_migr,
-                    "severe_distress":       severe,
-                    "deep_distress":         deep,
-                })
+        records.append({
+            "tract_id":              geoid,
+            "nmtc_eligible":         lic_elig,
+            "distress_level":        dlevel,
+            "poverty_rate":          poverty_rate,
+            "ami_ratio":             ami_ratio,
+            "unemployment_rate":     unemp_rate,
+            "is_non_metro":          non_metro,
+            "is_high_migration_rural": high_migr,
+            "severe_distress":       severe,
+            "deep_distress":         deep,
+        })
+
+    if not header_seen:
+        raise EligibilitySchemaError(
+            f"sheet {ELIGIBILITY_XLSB_SHEET!r} has no rows at all — no header "
+            f"could be validated." + _DRIFT_REMEDY
+        )
 
     # Row-count floor: a degenerate/near-empty parse must raise, not yield an
     # (almost) empty table that would silently mark real tracts "not found".
     if len(records) < ELIGIBILITY_MIN_ROWS:
         raise EligibilitySchemaError(
-            f"eligibility .xlsb parsed only {len(records)} data rows, below the "
+            f"eligibility workbook parsed only {len(records)} data rows, below the "
             f"floor of {ELIGIBILITY_MIN_ROWS} (live file has 85,395). This is a "
             f"degenerate parse, not a usable table."
         )

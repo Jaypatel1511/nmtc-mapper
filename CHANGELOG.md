@@ -2,6 +2,146 @@
 
 All notable changes to nmtc-mapper are documented here.
 
+## [0.6.1] — 2026-09-13
+
+**Availability fix. A cold install of 0.4.3, 0.5.0 or 0.6.0 cannot load the
+eligibility table at all.** On 2026-09-03 the CDFI Fund replaced the
+August-2025 `.xlsb` with an `.xlsx` at a new URL, and the URL those three
+releases pin began answering **403** — to every user agent, not just `curl`.
+Downgrading is not a workaround: all three pin the identical dead literal.
+Re-derived on 2026-09-13 with an empty `HOME`:
+
+    nmtcmapper.exceptions.EligibilityDownloadError: Failed to download NMTC
+    eligibility file from https://www.cdfifund.gov/system/files?file=2025-08/
+    NMTC_2016-2020_Severe_Deep_Distress_August-2025b.xlsb: access blocked
+    (403 Forbidden)
+
+The package **failed safe** — a typed error, no fabricated verdict — which is
+why this is an availability defect and not a correctness one. Every machine
+with a warm `~/.nmtcmapper/cache` kept working on the superseded bytes and
+could not see it.
+
+**No verdict moves.** `nmtc_eligible` and `distress_level` are identical for
+all 85,395 tracts under the old file and the new (0 differences; 35,335
+eligible; severe 21,182 and deep 8,061 byte-identical). One *field* moves —
+`is_high_migration_rural`, below.
+
+### What changed upstream, each figure re-derived from both files
+
+| | July 2026 `.xlsb` | September 2026 `.xlsx` |
+|---|---|---|
+| URL | `?file=2025-08/NMTC_2016-2020_Severe_Deep_Distress_August-2025b.xlsb` (**403**) | `?file=2026-09/NMTC_LIC_Eligibility_Dataset_9_3_2026.xlsx` (200, 10,290,864 bytes, sha256 `e99f5114…d2ae0`) |
+| Listed at | — | https://www.cdfifund.gov/documents/geographic-reports, "New Markets Tax Credit 2016-2020 ACS Low-Income Communities and Distress", *Updated Sep 09, 2026* |
+| Container | OOXML zip with `xl/workbook.bin` | OOXML zip with `xl/workbook.xml` |
+| Data sheet | `2016-2020`, header at row 0 | `2016-2020`, **banner row** at row 0 (only column N filled: "Targeted Distressed Areas"), header at row 1 |
+| GEOIDs | 85,395 | 85,395 (same set) |
+| Column C `YES` (LIC) | 35,335 | 35,335 (0 diffs) |
+| Columns A–M | | identical, every cell (1,583 poverty `NA`, 2,358 MFI `NA`) |
+| Column N heading | *High Migration Rural County Low-Income Community Census Tract* | *High Migration Rural County Census Tract for Deep Distress* |
+| Column N `YES` | 1,422 | **1,318** — a strict subset; 104 dropped, 0 added |
+| Column O heading | `Severe distress=LIC AND (Poverty>30%; MFI<=60%;Unemployment>=1.5)` | `Severe Distress (Poverty>30%;MFI<=60%; OR Unemployment>=1.5)` — values identical (21,182) |
+| Column P heading | `Deep distress=LIC AND (Poverty>40%; MFI<=40%;Unemployment>=2.5)` | `Deep Distress (Poverty>40%;MFI<=40%; OR Unemployment>=2.5)` — values identical (8,061) |
+| NOTES sheet | "In July 2026, the dataset was reformatted to include High-Migration Rural Census Tracts under COLUMN C. Only formatting changes were made. No eligibility changes were made." | "In September 2026, the dataset was reformatted to include High-Migration Rural Census Tracts below 85% Median Family Income under COLUMN C. Only formatting changes were made. No eligibility changes were made." Columns O/P are still defined `=LIC AND (...)` there. |
+
+**The 104 dropped from column N** are all non-metro, all column C `YES` in
+both files, all LIC by the poverty route (column E `YES`, column G `NO`), with
+MFI from 85.7% to 134.4%. Every one of the 1,318 kept is non-metro with MFI
+<= 85% (max 84.99%) or MFI `NA` (14). Column N therefore now flags the
+**income-route** §45D(e)(5) determination only; it no longer means "any LIC
+tract in a high-migration rural county". That is the one change in this file
+that is not formatting, and the NOTES sentence that says otherwise is a claim
+the file makes about itself, not a measurement.
+
+### `is_high_migration_rural` — definition changed under a stable name
+
+This package's contract is *what the CDFI Fund published*, and the Fund now
+publishes the narrower column. 0.6.1 **carries the current column** — `True`
+for 1,318 tracts, was 1,422 — and discloses it here, in the README (Output
+Columns), in `docs/eligibility.md` and in `schema.py` at index 13. It does not
+keep a 1,422-row field alive from a file that no longer exists, and it does not
+withhold the column, which would trade a disclosed change for an undisclosed
+absence. The 0.4.2 verdict rule, column C **or** column N, is unchanged and is
+still a no-op on the live file (all 1,318 are column C `YES`).
+
+**Gate, run before this entry was written:** `scripts/verify-column-n-parity.py`
+loads the legacy `.xlsb` and the new `.xlsx` through the package's own dispatch
+and parser and diffs every output column over all 85,395 tracts. Result:
+`nmtc_eligible` 0 diffs, `distress_level` 0 diffs (deep 8,061 / severe 13,121 /
+lic 14,153 / ineligible 50,060 in both), `severe_distress` / `deep_distress` /
+`is_non_metro` / all three metric columns 0 diffs; `is_high_migration_rural`
+1,422 → 1,318, dropped 104, added 0. Had a single verdict moved, this would be
+a methodology release, not this one.
+
+### Changed
+
+- **`CDFI_FUND_LIC_URL_2020` retargeted** to the September-2026 `.xlsx`.
+  The superseded URL is recorded beside it in `schema.py`.
+- **The loader dispatches on the container, not on the URL.** A Drupal
+  `?file=` URL is not a content type, and the cache filename is a module
+  constant. `_sniff_workbook_format` reads the ZIP member list — `PK` +
+  `xl/workbook.bin` → `.xlsb` via pyxlsb; `PK` + `xl/workbook.xml` → `.xlsx`
+  via openpyxl (handed an open file, because openpyxl itself refuses on
+  extension before reading a byte); anything else → `EligibilityParseError`
+  quoting the first bytes and the members found. Before this, an `.xlsx` fed
+  to the pyxlsb-only reader died with a bare
+  `KeyError: "There is no item named 'xl/_rels/workbook.bin.rels' in the
+  archive"` — not a package exception, and the cached-file self-heal could not
+  act on it. **`.xlsb` support is kept, not replaced**: the Fund has changed
+  container once in each direction now, and a flip back must not need another
+  emergency release. Both readers feed one positional parser.
+- **Header row located, not assumed**: the first row with a non-blank column 0
+  within `ELIGIBILITY_HEADER_SEARCH_ROWS` (5). The `.xlsx` carries a banner row
+  above the header; beyond the window is an `EligibilitySchemaError`.
+- **Headers 13, 14 and 15 re-pinned** to the September-2026 strings. The
+  July-2026 strings join the Aug-2025b ones as a superseded generation the
+  suite proves is rejected (the pin moved; it did not widen).
+- **Cache filename** `NMTC_LIC_Eligibility_2016_2020.xlsb` →
+  `NMTC_LIC_Eligibility_2016_2020.xlsx`. An upgrade from <= 0.6.0 does a plain
+  cold download; the old `.xlsb` is unused and may be deleted. The name says
+  what the Fund publishes today; the loader never trusts it.
+- Error text says "eligibility workbook" where it said "eligibility .xlsb".
+
+### Added
+
+- **`tests/test_live_pinned_urls.py` — one `@live` gate per externally-pinned
+  URL**, failing on ANY non-200 and naming where the replacement is published:
+  `CDFI_FUND_LIC_URL_2020` (→ `/documents/geographic-reports`), `OZ_URL_2018`,
+  `OZ2_URL`, `CENSUS_GEOCODER_URL` and `CENSUS_GEOCODER_BATCH_URL` (requested
+  the way the package requests them — the batch endpoint is POST-only). Plus a
+  red proof: the helper pointed at a path that 404s must fail and must name
+  the status and the page. Run against the 0.6.0 pin before the retarget, the
+  CDFI gate failed with `HTTP 403 … Find the replacement at
+  https://www.cdfifund.gov/documents/geographic-reports`. **This is the check
+  that would have caught the move on 2026-09-03, eight days before 0.6.0
+  shipped.** CI deselects `@live`, so these are named as a pre-tag step in
+  `CONTRIBUTING.md` — a live gate nobody runs is the gate nobody ran.
+- `tests/test_workbook_dispatch.py`: the sniff on both containers, the
+  filename-is-ignored proofs in both directions, and the `.xlsx` path end to
+  end on real bytes (banner row, magnitudes, the C-or-N verdict, the pin).
+- `scripts/verify-column-n-parity.py`: the verdict-unchanged gate above,
+  runnable against any machine that still holds the legacy `.xlsb`.
+- Two live eligibility tests: column N is all non-metro and within the 85%
+  band (the meaning it now has), and the live file is the container this
+  release was verified against.
+
+### Rule, recorded because the mitigation only works if it is visible
+
+A pinned URL to a third party is a dependency with no version constraint and
+no notification. A HEAD that returns 403 is not "an access restriction on an
+unchanged file" until someone has checked — it was the file being gone, and
+the note that recorded the 403 filed it as a staleness risk for a later
+release. *"Fragile if X ever happens" must be checked against whether X
+already happens.* The next release-readiness pass re-reads every deferred
+check and asks whether its condition is already met.
+
+### Not in this release
+
+Nothing else. No new public API, no new status value, no normalization, no
+change to `eligibility/checker.py`'s rendering or the status vocabulary. The
+settle-read findings that are not this outage are a later release.
+
+---
+
 ## [0.6.0] — 2026-09-11
 
 **The OZ 2.0 restoration.** `docs/oz2-methodology.md` was written 2026-08-05 as a

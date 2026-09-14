@@ -50,16 +50,32 @@ def test_live_eligible_count_reflects_the_widened_column_c(live_table):
 
 
 def test_live_high_migration_rural_tracts_are_all_lic(live_table):
-    """The semantic content of the widening: all 1,422 High Migration Rural
-    tracts are now flagged eligible in column C. Under Aug-2025b, 168 of them
-    were not — v0.3.1 through v0.4.1 reported those as NOT NMTC eligible, which
+    """The semantic content of the widening: every High Migration Rural tract
+    is flagged eligible in column C. Under Aug-2025b, 168 of them were not —
+    v0.3.1 through v0.4.1 reported those as NOT NMTC eligible, which
     contradicted 26 U.S.C. 45D(e)(5), the paragraph AJCA 2004 sec. 223 added.
 
     Since 0.4.2 the verdict is column C OR column N, so this assertion holds
-    whichever column the Fund publishes the flag in."""
+    whichever column the Fund publishes the flag in.
+
+    0.6.1: the count is 1,318, not 1,422. The September-2026 file narrowed
+    column N to the income-route determination (the 104 dropped are poverty-
+    route LICs above 85% MFI); see schema.py at index 13 and CHANGELOG 0.6.1.
+    A reading of 1,422 here would mean the Fund had restored the wider column."""
     hmr = live_table[live_table["is_high_migration_rural"]]
-    assert len(hmr) == 1_422
+    assert len(hmr) == 1_318
     assert bool(hmr["nmtc_eligible"].all())
+
+
+def test_live_column_n_is_all_non_metro_and_within_the_85_percent_band(live_table):
+    """What the September-2026 column N now asserts, measured: every YES is a
+    non-metro tract with MFI <= 85% (the 45D(e)(5) band) or MFI = NA. If a
+    metro tract or an MFI above 85% ever appears here, the column has changed
+    meaning again and `is_high_migration_rural` needs another disclosure."""
+    hmr = live_table[live_table["is_high_migration_rural"]]
+    assert bool(hmr["is_non_metro"].all())
+    above = hmr[hmr["ami_ratio"] > 0.85]
+    assert above.empty, above.index.tolist()[:10]
 
 
 def test_live_column_n_is_an_lic_determination_not_county_membership(live_table):
@@ -73,7 +89,7 @@ def test_live_column_n_is_an_lic_determination_not_county_membership(live_table)
     statutory prong: poverty >= 20% (45D(e)(1)(A)), or MFI <= 85% (the
     45D(e)(5) band, which subsumes the ordinary <= 80% test)."""
     hmr = live_table[live_table["is_high_migration_rural"]]
-    assert len(hmr) == 1_422
+    assert len(hmr) == 1_318
 
     qualifies = (hmr["poverty_rate"] >= 0.20) | (hmr["ami_ratio"] <= 0.85)
     offenders = hmr[~qualifies]
@@ -122,16 +138,39 @@ def test_live_severe_and_deep_flags_match_the_corrected_thresholds(live_table):
 
 def test_live_headers_are_byte_identical_to_the_pins():
     """Read the live header row directly and compare every pinned index. This is
-    the check that failed in the field and the one that will fail next time."""
-    import pyxlsb
-    from nmtcmapper.data.loader import _normalize_header, download_eligibility_file
-    from nmtcmapper.data.schema import ELIGIBILITY_XLSB_SHEET
+    the check that failed in the field and the one that will fail next time.
+
+    0.6.1: reads through the container dispatch rather than pyxlsb directly, so
+    it follows whichever format the Fund publishes; and it locates the header
+    the way the loader does (first row with a non-blank column 0 — the
+    September-2026 .xlsx has a banner row above it)."""
+    from nmtcmapper.data.loader import (
+        _normalize_header, download_eligibility_file, _sniff_workbook_format,
+        _iter_xlsb_rows, _iter_xlsx_rows,
+    )
+    from nmtcmapper.data.schema import ELIGIBILITY_HEADER_SEARCH_ROWS
 
     path = download_eligibility_file()
-    with pyxlsb.open_workbook(str(path)) as wb:
-        with wb.get_sheet(ELIGIBILITY_XLSB_SHEET) as sheet:
-            header = [c.v for c in next(iter(sheet.rows()))]
+    fmt = _sniff_workbook_format(path)
+    rows = _iter_xlsb_rows(path) if fmt == "xlsb" else _iter_xlsx_rows(path)
+    header = None
+    for i, vals in enumerate(rows):
+        if i >= ELIGIBILITY_HEADER_SEARCH_ROWS:
+            break
+        if vals and vals[0] not in (None, ""):
+            header = vals
+            break
+    assert header is not None, "no header row in the search window"
 
     assert len(header) == 16
     for idx, expected in ELIGIBILITY_XLSB_EXPECTED_HEADERS.items():
         assert _normalize_header(header[idx]) == _normalize_header(expected), idx
+
+
+def test_live_file_is_the_container_the_release_was_verified_against():
+    """0.6.1 was verified against an .xlsx. If the Fund flips back to .xlsb the
+    loader will read it (that is what the dispatch is for) — but the maintainer
+    should know, because every count in the release notes was re-derived from
+    the .xlsx and a flip is a re-publish."""
+    from nmtcmapper.data.loader import download_eligibility_file, _sniff_workbook_format
+    assert _sniff_workbook_format(download_eligibility_file()) == "xlsx"

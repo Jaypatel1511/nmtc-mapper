@@ -24,9 +24,17 @@ own does not carry the non-metro requirement. The shipped rule applies
 read `is_non_metro` *in place of* the high-migration-rural designation, which
 granted LIC to **932 tracts on non-metro status alone**; the corrected rule
 reproduces the Fund's published column C with 0 disagreements across all 85,395
-rows. On the current file all 1,422 HMR tracts are non-metro, so the non-metro
+rows. On the current file all 1,318 HMR tracts are non-metro, so the non-metro
 conjunct changes no row today — it is written out because that is a property of
 one published file, not of the statute.
+
+**`is_high_migration_rural` narrowed (0.6.1).** The CDFI Fund's September-2026
+workbook retitled column N from *High Migration Rural County Low-Income Community
+Census Tract* (1,422 YES) to *High Migration Rural County Census Tract for Deep
+Distress* (1,318 YES). The 104 dropped are poverty-route LICs with MFI above 85%;
+the column now carries the income-route determination only. No `nmtc_eligible`
+or `distress_level` value changed for any of the 85,395 tracts. The README's
+Output Columns section carries the full source-and-definition note.
 
 ## Distress Levels
 

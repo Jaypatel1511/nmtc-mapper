@@ -16,7 +16,8 @@ from nmtcmapper import (
     OZDownloadError, OZParseError,
 )
 
-ELIG_FILENAME = "NMTC_LIC_Eligibility_2016_2020.xlsb"
+# The loader's own constant, not a literal: 0.6.1 renamed it (.xlsb -> .xlsx).
+ELIG_FILENAME = loader.ELIGIBILITY_CACHE_FILENAME
 OZ_FILENAME = "QOZ_Designated_2018.xlsx"
 
 
@@ -92,7 +93,7 @@ def test_corrupt_file_raises(isolated_cache, monkeypatch):
 
 
 def test_html_error_page_raises(isolated_cache, monkeypatch):
-    # A 403/404 HTML error page saved under the .xlsb name (a real CDN failure
+    # A 403/404 HTML error page saved under the cache name (a real CDN failure
     # mode). The heal re-downloads once; the origin is still serving HTML, so
     # the pre-replace guard rejects the body before it can overwrite anything.
     (isolated_cache / ELIG_FILENAME).write_bytes(
