@@ -1,0 +1,163 @@
+name: Live URLs
+
+# WHY THIS EXISTS. On 2026-09-03 the CDFI Fund moved the NMTC eligibility
+# workbook; the pinned URL began returning 403 and every published version of
+# this package was broken for 11 days before anyone noticed. 0.6.1 added the
+# `@live` gates (tests/test_live_pinned_urls.py and the rest of the live suite)
+# that fetch every pinned third-party URL and fail on anything but 200 -- but
+# ci.yml and release.yml deselect `live`, so until this workflow the only thing
+# that ran them was a line in CONTRIBUTING.md. A weekly run turns the next
+# silent move into a red run and an open issue within a week.
+#
+# It runs the WHOLE live suite (`-m live`), not only the URL module: a pinned
+# file that still answers 200 but was re-published with different contents
+# (digest, headers, counts) is the same class of silent break.
+#
+# KNOWN LIMITS (GitHub behaviour, not something this file can change):
+#   * Scheduled workflows run only from the default branch, so this does
+#     nothing until it is merged to main.
+#   * In a public repository GitHub DISABLES scheduled workflows after 60 days
+#     with no repository activity, and a disabled schedule fails silently --
+#     the exact failure mode this file exists to close. GitHub emails a
+#     warning before it disables; re-enable from the Actions tab (or push any
+#     commit). Check the Actions tab shows a recent "Live URLs" run.
+#   * GitHub's own failure email for a scheduled run goes to the user who last
+#     edited the cron line. The `open-issue` job below makes a failure visible
+#     on the repository itself, independent of anyone's notification settings.
+
+on:
+  schedule:
+    # Mondays 13:17 UTC. Off the top of the hour on purpose: :00 is when most
+    # scheduled workflows fire and runs there are delayed or dropped first.
+    - cron: "17 13 * * 1"
+  workflow_dispatch:
+
+# Least privilege. The test job only reads the repo. The one write scope
+# (issues) is granted to the open-issue job alone, which never checks out or
+# runs repository code.
+permissions:
+  contents: read
+
+jobs:
+  live:
+    name: live suite (py3.12)
+    # Runner pinned, not `ubuntu-latest`: actions/python-versions ships NO Python
+    # 3.9 build for ubuntu-26.04, and the `ubuntu-latest` label moves to Ubuntu 26
+    # on 2026-10-19. This job only needs 3.12, but it stays on the same image as
+    # ci.yml so a live failure is never an image difference. Move it with ci.yml.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+    # Newest version in ci.yml's matrix. One version is enough: this job tests
+    # the publishers' URLs, not the interpreter.
+    - name: Set up Python 3.12
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+      with:
+        python-version: '3.12'
+
+    - name: Install package with dev extras
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[dev]"
+
+    # A gate whose selection matches nothing must FAIL, not pass. pytest
+    # already exits 5 on "no tests collected", which fails this step; the
+    # counts below are derived from the marker at run time -- never typed --
+    # so a later run can prove every selected test actually executed.
+    - name: Collect the live suite (derived from the marker)
+      id: collect
+      shell: bash
+      run: |
+        # `shell: bash` runs with -e; turn it off so the exit code is reported.
+        set +e -uo pipefail
+        pytest tests/ --collect-only -q -m live > "${RUNNER_TEMP}/live-collect.txt" 2>&1
+        RC=$?
+        cat "${RUNNER_TEMP}/live-collect.txt"
+        if [ "${RC}" -ne 0 ]; then
+          echo "::error::collecting -m live exited ${RC} (5 = no tests matched the marker). A live gate that selects nothing is not a gate."
+          exit 1
+        fi
+        COLLECTED="$(grep -c '^tests/.*::' "${RUNNER_TEMP}/live-collect.txt" || true)"
+        # The URL module is the gate the 0.6.1 outage needed. Every test in it
+        # must be selected by `-m live`: compare the module collected with and
+        # without the marker, so an unmarked or de-marked test here is caught.
+        URL_ALL="$(pytest tests/test_live_pinned_urls.py --collect-only -q 2>/dev/null | grep -c '^tests/.*::' || true)"
+        URL_LIVE="$(grep -c '^tests/test_live_pinned_urls.py::' "${RUNNER_TEMP}/live-collect.txt" || true)"
+        echo "live tests collected: ${COLLECTED}; pinned-URL module: ${URL_LIVE} live of ${URL_ALL}"
+        if [ "${COLLECTED}" -eq 0 ] || [ "${URL_LIVE}" -eq 0 ] || [ "${URL_LIVE}" -ne "${URL_ALL}" ]; then
+          echo "::error::the live selection is empty or no longer covers tests/test_live_pinned_urls.py in full."
+          exit 1
+        fi
+        echo "collected=${COLLECTED}" >> "${GITHUB_OUTPUT}"
+
+    - name: Run the live suite
+      run: pytest tests/ -v -m live --junitxml="${RUNNER_TEMP}/live-junit.xml"
+
+    # pytest exits 0 when every selected test SKIPS. A skipped live test
+    # fetched nothing, so a green run must have executed every test collected.
+    - name: Every collected live test executed
+      shell: bash
+      env:
+        COLLECTED: ${{ steps.collect.outputs.collected }}
+      run: |
+        set -euo pipefail
+        EXECUTED="$(python - "${RUNNER_TEMP}/live-junit.xml" <<'PY'
+        import sys, xml.etree.ElementTree as ET
+        root = ET.parse(sys.argv[1]).getroot()
+        suites = root.findall("testsuite") if root.tag == "testsuites" else [root]
+        print(sum(int(s.get("tests", 0)) - int(s.get("skipped", 0)) for s in suites))
+        PY
+        )"
+        echo "live tests executed: ${EXECUTED} of ${COLLECTED} collected"
+        if [ "${EXECUTED}" -ne "${COLLECTED}" ]; then
+          echo "::error::only ${EXECUTED} of ${COLLECTED} live tests executed; a skipped live test proves nothing."
+          exit 1
+        fi
+
+  # Makes a failure visible on the repository, deduplicated by exact title:
+  # one open issue per outage, with a comment per further failing run, rather
+  # than a new issue every Monday. Runs on any non-success of `live`
+  # (failure, or cancelled -- a job timeout lands here too). Not auto-closed
+  # on recovery: a human closes it after re-pinning.
+  open-issue:
+    needs: live
+    if: always() && needs.live.result != 'success'
+    # Same pinned image as the job above; nothing here depends on Python.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+    - name: Open or update the tracking issue
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+        TITLE: "Live URL check failing: a pinned third-party URL or file may have moved"
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        RESULT: ${{ needs.live.result }}
+        EVENT: ${{ github.event_name }}
+      run: |
+        set -euo pipefail
+        BODY="$(printf '%s\n' \
+          "The scheduled live suite (\`.github/workflows/live-urls.yml\`) did not pass." \
+          "" \
+          "- result: \`${RESULT}\` (trigger: \`${EVENT}\`)" \
+          "- run: ${RUN_URL}" \
+          "- date (UTC): $(date -u +%Y-%m-%dT%H:%MZ)" \
+          "" \
+          "Each failing test names the constant and the page where the publisher lists the replacement." \
+          "Re-pin the constant; never downgrade (every earlier release pins the same literal)." \
+          "See CONTRIBUTING.md, pre-tag checklist step 1.")"
+        # Exact-title match via the list API (not search, whose index lags).
+        NUM="$(gh issue list --state open --limit 500 --json number,title \
+          --jq '[.[] | select(.title == env.TITLE)][0].number // empty')"
+        if [ -n "${NUM}" ]; then
+          gh issue comment "${NUM}" --body "${BODY}"
+          echo "commented on existing issue #${NUM}"
+        else
+          gh issue create --title "${TITLE}" --body "${BODY}"
+        fi

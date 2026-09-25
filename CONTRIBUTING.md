@@ -47,9 +47,14 @@ absence has already cost a release.
 1. **Fetch every pinned external URL.** The four data files and the two
    geocoder endpoints this package depends on are third-party URLs with no
    version constraint and no notification when they move. CI deselects
-   `@live`, so nothing but this step turns a moved file into a red test:
+   `@live`; between releases, `.github/workflows/live-urls.yml` runs the
+   live suite weekly and opens an issue when it fails. That is up to a week
+   stale at tag time, so run it here too:
 
        PYTHONPATH=. pytest tests/test_live_pinned_urls.py -m live -v
+
+   (Check the Actions tab shows a recent "Live URLs" run: GitHub disables
+   scheduled workflows after 60 days without repository activity.)
 
    A failure names the constant and the page where the replacement is
    published. Re-pin; never downgrade (every earlier release pins the same
